@@ -26,6 +26,7 @@ app.use('/api/gmail', require('./routes/gmail'));
 app.use('/api/products', require('./routes/products'));
 app.use('/api/forecast', require('./routes/forecast'));
 app.use('/api/metrics', require('./routes/metrics'));
+app.use('/api/insights', require('./routes/insights'));
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
