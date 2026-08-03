@@ -20,7 +20,18 @@ router.get('/', async (req, res) => {
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+
+  // Agrega % de avance (tareas completadas / total) a cada proyecto
+  const withProgress = await Promise.all(
+    data.map(async (p) => {
+      const { data: tasks } = await supabase.from('tasks').select('status').eq('project_id', p.id);
+      const total = tasks?.length || 0;
+      const done = tasks?.filter((t) => t.status === 'completada').length || 0;
+      return { ...p, progress_pct: total ? Math.round((done / total) * 100) : 0, total_tasks: total };
+    })
+  );
+
+  res.json(withProgress);
 });
 
 // GET /api/projects/:id — incluye tareas anidadas (padres + subtareas)

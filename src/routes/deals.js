@@ -188,4 +188,38 @@ async function instantiateProjectFromTemplate({ templateId, dealId, companyId, o
   return project;
 }
 
+// ── LÍNEAS DE PRODUCTO DEL DEAL ──────────────────────────────
+
+// GET /api/deals/:id/line-items
+router.get('/:id/line-items', async (req, res) => {
+  const { data, error } = await supabase
+    .from('deal_line_items')
+    .select('*, products(name, sku)')
+    .eq('deal_id', req.params.id)
+    .order('created_at');
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// POST /api/deals/:id/line-items  { product_id?, description?, quantity, unit_price, currency }
+router.post('/:id/line-items', async (req, res) => {
+  const { data, error } = await supabase
+    .from('deal_line_items')
+    .insert({ ...req.body, deal_id: req.params.id })
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  await logAudit('deal', req.params.id, 'updated', req.teamMember.id, { line_item: 'added' });
+  res.status(201).json(data);
+});
+
+router.delete('/:id/line-items/:itemId', async (req, res) => {
+  const { error } = await supabase.from('deal_line_items').delete().eq('id', req.params.itemId);
+  if (error) return res.status(400).json({ error: error.message });
+  await logAudit('deal', req.params.id, 'updated', req.teamMember.id, { line_item: 'removed' });
+  res.status(204).send();
+});
+
 module.exports = router;

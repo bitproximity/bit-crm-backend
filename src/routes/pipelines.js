@@ -52,4 +52,39 @@ router.patch('/stages/:stageId', requireRole('admin'), async (req, res) => {
   res.json(data);
 });
 
+// GET /api/pipelines/suggest?country=&company_type=
+router.get('/suggest', async (req, res) => {
+  const { country, company_type } = req.query;
+
+  let query = supabase.from('pipeline_rules').select('*, pipelines(*)');
+  if (country) query = query.eq('country', country);
+  if (company_type) query = query.eq('company_type', company_type);
+
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Prioriza una regla que matchee país + tipo exacto, si no, cualquiera que matchee algo
+  const exact = data.find((r) => r.country === country && r.company_type === company_type);
+  res.json({ suggested: exact?.pipelines || data[0]?.pipelines || null });
+});
+
+// POST /api/pipelines/rules  { pipeline_id, country?, company_type? } — solo admin
+router.post('/rules', requireRole('admin'), async (req, res) => {
+  const { data, error } = await supabase.from('pipeline_rules').insert(req.body).select().single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+router.get('/rules', async (req, res) => {
+  const { data, error } = await supabase.from('pipeline_rules').select('*, pipelines(name)');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+router.delete('/rules/:id', requireRole('admin'), async (req, res) => {
+  const { error } = await supabase.from('pipeline_rules').delete().eq('id', req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(204).send();
+});
+
 module.exports = router;

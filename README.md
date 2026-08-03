@@ -65,7 +65,43 @@ Todas las rutas (salvo `/health`) requieren header `Authorization: Bearer <supab
 Cada creación/edición/borrado/cambio de etapa/asignación queda registrada en
 `audit_log` con quién, qué campo cambió y cuándo — vía el helper `utils/audit.js`.
 
+## Multimoneda
+
+`deals.currency` acepta: `USD, COP, MXN, PYG, DOP, EUR`. La tabla
+`exchange_rates` guarda la conversión manual de cada moneda a USD (se puede
+actualizar vía `PATCH /api/exchange-rates/:currency`, solo admin) — el
+dashboard usa esas tasas para sumar el pipeline abierto en un solo número
+aunque haya deals en distintas monedas. Correr `migration_002...sql` antes
+de usar esto.
+
+## Campos personalizados
+
+`GET/POST /api/custom-fields?entity_type=deal` define campos nuevos por tipo
+de entidad (contacto, empresa, deal, tarea, proyecto). Tipos soportados:
+`text, number, date, boolean, select`. Los valores por entidad van en
+`GET/PUT /api/custom-fields/values/:entity_id`.
+
+## Integración con Gmail
+
+Requiere crear credenciales OAuth en Google Cloud Console:
+
+1. https://console.cloud.google.com → crea o selecciona un proyecto.
+2. **APIs & Services → Library** → habilita **Gmail API**.
+3. **APIs & Services → OAuth consent screen** → tipo "Internal" si usas
+   Google Workspace con dominio propio (bitproximity.com), o "External" +
+   agregar los emails de tu equipo como "Test users" si no.
+4. **Credentials → Create Credentials → OAuth client ID** → tipo "Web application".
+5. **Authorized redirect URIs** → agrega exactamente:
+   `https://tu-backend.up.railway.app/api/gmail/callback`
+6. Copia el **Client ID** y **Client Secret** → variables en Railway:
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.
+
+Cada usuario del equipo conecta su propia cuenta desde el frontend
+(Configuración → Conectar Gmail). Los correos sincronizados con un contacto
+quedan guardados en `gmail_messages` — es lectura únicamente (scope
+`gmail.readonly`), no se puede enviar correos desde el CRM en esta versión.
+
 ## Pendiente (siguiente fase)
-- Frontend (React + Tailwind) en Cloudflare Pages: kanban de deals, tablero de
-  tareas tipo Asana, vista de contactos/empresas, dashboard.
-- Login con Supabase Auth en el frontend.
+- Vista de detalle de deal/contacto con hilo de correos de Gmail embebido.
+- UI de administración de campos personalizados (hoy solo vía API).
+- Actualización automática de tasas de cambio (hoy es manual).

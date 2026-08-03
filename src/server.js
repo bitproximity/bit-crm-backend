@@ -20,6 +20,12 @@ app.use('/api/tags', require('./routes/tags'));
 app.use('/api/activities', require('./routes/activities'));
 app.use('/api/templates', require('./routes/templates'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/custom-fields', require('./routes/customFields'));
+app.use('/api/exchange-rates', require('./routes/exchangeRates'));
+app.use('/api/gmail', require('./routes/gmail'));
+app.use('/api/products', require('./routes/products'));
+app.use('/api/forecast', require('./routes/forecast'));
+app.use('/api/metrics', require('./routes/metrics'));
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
