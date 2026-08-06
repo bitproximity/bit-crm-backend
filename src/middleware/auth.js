@@ -1,8 +1,10 @@
 const supabase = require('../config/supabase');
+const crypto = require('crypto');
 
 /**
- * Verifica el JWT de Supabase Auth enviado en el header Authorization
- * y adjunta el perfil interno (team_members) a req.teamMember.
+ * Verifica el JWT de Supabase Auth O una API key de MCP (para Claude Desktop/API)
+ * enviados en el header Authorization, y adjunta el perfil interno (team_members)
+ * a req.teamMember.
  */
 async function requireAuth(req, res, next) {
   try {
@@ -11,6 +13,27 @@ async function requireAuth(req, res, next) {
 
     if (!token) {
       return res.status(401).json({ error: 'Falta token de autenticación' });
+    }
+
+    // Las API keys de MCP tienen el prefijo 'bitcrm_mcp_' — se validan aparte del JWT
+    if (token.startsWith('bitcrm_mcp_')) {
+      const keyHash = crypto.createHash('sha256').update(token).digest('hex');
+
+      const { data: apiKey } = await supabase
+        .from('mcp_api_keys')
+        .select('*, team_members(*)')
+        .eq('key_hash', keyHash)
+        .is('revoked_at', null)
+        .maybeSingle();
+
+      if (!apiKey || !apiKey.team_members?.active) {
+        return res.status(401).json({ error: 'API key inválida o revocada' });
+      }
+
+      supabase.from('mcp_api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', apiKey.id).then(() => {});
+
+      req.teamMember = apiKey.team_members;
+      return next();
     }
 
     const { data: userData, error: authError } = await supabase.auth.getUser(token);

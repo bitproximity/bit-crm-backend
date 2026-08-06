@@ -36,6 +36,7 @@ app.use('/api/forecast', require('./routes/forecast'));
 app.use('/api/metrics', require('./routes/metrics'));
 app.use('/api/insights', require('./routes/insights'));
 app.use('/api/calcom', require('./routes/calcom'));
+app.use('/api/mcp-keys', require('./routes/mcpKeys'));
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
