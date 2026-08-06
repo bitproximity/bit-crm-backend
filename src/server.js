@@ -35,6 +35,7 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/forecast', require('./routes/forecast'));
 app.use('/api/metrics', require('./routes/metrics'));
 app.use('/api/insights', require('./routes/insights'));
+app.use('/api/calcom', require('./routes/calcom'));
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {

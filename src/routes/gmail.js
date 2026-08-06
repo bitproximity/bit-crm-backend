@@ -162,4 +162,51 @@ router.get('/messages/:entity_type/:entity_id', async (req, res) => {
   res.json(data);
 });
 
+// GET /api/gmail/calendar/events?days=14 — próximos eventos del calendario conectado
+router.get('/calendar/events', async (req, res) => {
+  const days = Number(req.query.days) || 14;
+  const gmail = await getGmailClientForUser(req.teamMember.id); // reutiliza el mismo cliente OAuth
+
+  const conn = await supabase
+    .from('gmail_connections')
+    .select('*')
+    .eq('team_member_id', req.teamMember.id)
+    .single();
+
+  if (!conn.data) return res.status(400).json({ error: 'No has conectado tu cuenta de Google todavía' });
+
+  const client = getOAuthClient();
+  client.setCredentials({ refresh_token: conn.data.refresh_token });
+  const calendar = google.calendar({ version: 'v3', auth: client });
+
+  try {
+    const timeMin = new Date().toISOString();
+    const timeMax = new Date(Date.now() + days * 86400000).toISOString();
+
+    const { data } = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 50,
+    });
+
+    const events = (data.items || []).map((e) => ({
+      id: e.id,
+      title: e.summary,
+      start: e.start?.dateTime || e.start?.date,
+      end: e.end?.dateTime || e.end?.date,
+      attendees: (e.attendees || []).map((a) => a.email),
+      location: e.location,
+      meetLink: e.hangoutLink,
+    }));
+
+    res.json(events);
+  } catch (err) {
+    console.error('Error consultando Google Calendar:', err);
+    res.status(500).json({ error: 'Error consultando el calendario' });
+  }
+});
+
 module.exports = router;
