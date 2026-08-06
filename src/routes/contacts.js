@@ -88,4 +88,69 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// POST /api/contacts/import  { contacts: [{ first_name, last_name, email, phone, company_name, source }] }
+// Importación masiva desde CSV. Si company_name viene y no existe la empresa, la crea.
+router.post('/import', async (req, res) => {
+  const { contacts } = req.body;
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return res.status(400).json({ error: 'Falta el array de contactos' });
+  }
+
+  const results = { created: 0, errors: [] };
+
+  for (const [i, c] of contacts.entries()) {
+    try {
+      if (!c.first_name) {
+        results.errors.push({ row: i + 1, error: 'Falta first_name' });
+        continue;
+      }
+
+      let company_id = null;
+      if (c.company_name) {
+        const { data: existing } = await supabase
+          .from('companies')
+          .select('id')
+          .ilike('name', c.company_name)
+          .maybeSingle();
+
+        if (existing) {
+          company_id = existing.id;
+        } else {
+          const { data: newCompany } = await supabase
+            .from('companies')
+            .insert({ name: c.company_name })
+            .select()
+            .single();
+          company_id = newCompany?.id || null;
+        }
+      }
+
+      const { data: contact, error } = await supabase
+        .from('contacts')
+        .insert({
+          first_name: c.first_name,
+          last_name: c.last_name || null,
+          email: c.email || null,
+          phone: c.phone || null,
+          company_id,
+          source: c.source || 'importado',
+          owner_id: req.teamMember.id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        results.errors.push({ row: i + 1, error: error.message });
+      } else {
+        results.created++;
+        await logAudit('contact', contact.id, 'created', req.teamMember.id, { via: 'import' });
+      }
+    } catch (err) {
+      results.errors.push({ row: i + 1, error: err.message });
+    }
+  }
+
+  res.json(results);
+});
+
 module.exports = router;

@@ -65,4 +65,42 @@ router.get('/', async (req, res) => {
   });
 });
 
+// GET /api/metrics/meetings?weeks=8 — reuniones agendadas por semana y por vendedor
+router.get('/meetings', async (req, res) => {
+  const weeks = Number(req.query.weeks) || 8;
+  const since = new Date();
+  since.setDate(since.getDate() - weeks * 7);
+
+  const { data: meetings, error } = await supabase
+    .from('activities')
+    .select('occurred_at, author_id, team_members(full_name)')
+    .eq('type', 'reunion')
+    .gte('occurred_at', since.toISOString())
+    .order('occurred_at');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const byWeek = {};
+  const byOwner = {};
+
+  meetings.forEach((m) => {
+    const d = new Date(m.occurred_at);
+    // Semana ISO simplificada: lunes de esa semana como clave
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const weekKey = monday.toISOString().slice(0, 10);
+
+    byWeek[weekKey] = (byWeek[weekKey] || 0) + 1;
+
+    const owner = m.team_members?.full_name || 'Sin asignar';
+    byOwner[owner] = (byOwner[owner] || 0) + 1;
+  });
+
+  res.json({
+    total: meetings.length,
+    by_week: Object.entries(byWeek).map(([week, count]) => ({ week, count })).sort((a, b) => a.week.localeCompare(b.week)),
+    by_owner: Object.entries(byOwner).map(([owner, count]) => ({ owner, count })).sort((a, b) => b.count - a.count),
+  });
+});
+
 module.exports = router;
