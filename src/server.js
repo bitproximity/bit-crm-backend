@@ -4,7 +4,15 @@ const cors = require('cors');
 
 const app = express();
 
-app.use(cors({ origin: process.env.FRONTEND_ORIGIN || '*' }));
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || '*')
+  .split(',')
+  .map((o) => o.trim());
+
+app.use(
+  cors({
+    origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
+  })
+);
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ ok: true }));
