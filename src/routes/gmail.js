@@ -162,6 +162,44 @@ router.get('/messages/:entity_type/:entity_id', async (req, res) => {
   res.json(data);
 });
 
+// GET /api/gmail/contacts — lista los contactos de Google (People API) del usuario conectado
+router.get('/contacts', async (req, res) => {
+  const { data: conn } = await supabase
+    .from('gmail_connections')
+    .select('refresh_token')
+    .eq('team_member_id', req.teamMember.id)
+    .single();
+
+  if (!conn) return res.status(400).json({ error: 'No has conectado tu Google todavía' });
+
+  const client = getOAuthClient();
+  client.setCredentials({ refresh_token: conn.refresh_token });
+  const people = google.people({ version: 'v1', auth: client });
+
+  try {
+    const { data } = await people.people.connections.list({
+      resourceName: 'people/me',
+      pageSize: 500,
+      personFields: 'names,emailAddresses,phoneNumbers,organizations',
+    });
+
+    const contacts = (data.connections || [])
+      .filter((p) => p.emailAddresses?.length) // solo los que tienen email, para poder deduplicar
+      .map((p) => ({
+        first_name: p.names?.[0]?.givenName || p.names?.[0]?.displayName?.split(' ')[0] || 'Sin nombre',
+        last_name: p.names?.[0]?.familyName || '',
+        email: p.emailAddresses[0].value,
+        phone: p.phoneNumbers?.[0]?.value || null,
+        company_name: p.organizations?.[0]?.name || null,
+      }));
+
+    res.json(contacts);
+  } catch (err) {
+    console.error('Error consultando Google Contacts:', err);
+    res.status(500).json({ error: 'Error consultando tus contactos de Google. Verifica que la People API esté habilitada en Google Cloud Console.' });
+  }
+});
+
 // GET /api/gmail/calendar/events?days=14 — próximos eventos del calendario conectado
 router.get('/calendar/events', async (req, res) => {
   const days = Number(req.query.days) || 14;
