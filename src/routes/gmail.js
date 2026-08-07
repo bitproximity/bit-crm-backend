@@ -183,7 +183,20 @@ router.get('/contacts', async (req, res) => {
       personFields: 'names,emailAddresses,phoneNumbers,organizations',
     });
 
-    const contacts = (data.connections || [])
+    let rawContacts = data.connections || [];
+
+    // Si la libreta de Contactos está vacía (común en cuentas de trabajo),
+    // usamos "Otros contactos" — la gente con la que Gmail detectó que
+    // interactuaste, aunque no los hayas guardado explícitamente.
+    if (rawContacts.length === 0) {
+      const { data: otherData } = await people.otherContacts.list({
+        pageSize: 500,
+        readMask: 'names,emailAddresses,phoneNumbers',
+      });
+      rawContacts = otherData.otherContacts || [];
+    }
+
+    const contacts = rawContacts
       .filter((p) => p.emailAddresses?.length) // solo los que tienen email, para poder deduplicar
       .map((p) => ({
         first_name: p.names?.[0]?.givenName || p.names?.[0]?.displayName?.split(' ')[0] || 'Sin nombre',
@@ -192,6 +205,10 @@ router.get('/contacts', async (req, res) => {
         phone: p.phoneNumbers?.[0]?.value || null,
         company_name: p.organizations?.[0]?.name || null,
       }));
+
+    if (contacts.length === 0) {
+      return res.status(404).json({ error: 'No se encontraron contactos con email en tu cuenta de Google (ni en Contactos ni en Otros contactos).' });
+    }
 
     res.json(contacts);
   } catch (err) {
