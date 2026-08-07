@@ -31,15 +31,17 @@ router.post('/connect', async (req, res) => {
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'Falta la API key' });
 
-  // Valida la key contra la API v2 de Cal.com antes de guardarla
+  // Valida la key contra la API v2 de Cal.com antes de guardarla.
+  // Usamos /v2/bookings (el mismo endpoint que consultamos después) en vez de
+  // /v2/event-types, que devolvía 404 en algunos tipos de cuenta.
   try {
-    const testRes = await fetch('https://api.cal.com/v2/event-types', {
+    const testRes = await fetch('https://api.cal.com/v2/bookings', {
       headers: calHeaders(api_key),
     });
     if (!testRes.ok) {
       const body = await testRes.text();
       console.error('Cal.com validation failed:', testRes.status, body);
-      return res.status(400).json({ error: 'API key inválida o sin permisos' });
+      return res.status(400).json({ error: `API key inválida o sin permisos (Cal.com respondió ${testRes.status})` });
     }
   } catch (err) {
     console.error('Error validando Cal.com:', err);
