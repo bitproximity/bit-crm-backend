@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
 
   if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
   if (owner_id) query = query.eq('owner_id', owner_id);
-  if (status) query = query.eq('status', status);
+  if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
