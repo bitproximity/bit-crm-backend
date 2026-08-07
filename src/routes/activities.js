@@ -87,4 +87,58 @@ router.patch('/:id', async (req, res) => {
   res.json(data);
 });
 
+// POST /api/activities/import  { activities: [{ title, type, due_date, contact_name, deal_title, done }] }
+router.post('/import', async (req, res) => {
+  const { activities } = req.body;
+  if (!Array.isArray(activities) || activities.length === 0) {
+    return res.status(400).json({ error: 'Falta el array de actividades' });
+  }
+
+  const results = { created: 0, errors: [] };
+
+  for (const [i, a] of activities.entries()) {
+    try {
+      if (!a.title) {
+        results.errors.push({ row: i + 1, error: 'Falta el asunto' });
+        continue;
+      }
+
+      let entity_type = null;
+      let entity_id = null;
+
+      if (a.deal_title) {
+        const { data: deal } = await supabase.from('deals').select('id').ilike('title', a.deal_title).maybeSingle();
+        if (deal) { entity_type = 'deal'; entity_id = deal.id; }
+      }
+      if (!entity_id && a.contact_name) {
+        const [first_name] = a.contact_name.split(' ');
+        const { data: contact } = await supabase.from('contacts').select('id').ilike('first_name', first_name).maybeSingle();
+        if (contact) { entity_type = 'contact'; entity_id = contact.id; }
+      }
+
+      const validTypes = ['llamada', 'email', 'reunion', 'nota', 'whatsapp', 'tarea'];
+      const type = validTypes.includes(a.type?.toLowerCase()) ? a.type.toLowerCase() : 'tarea';
+
+      const { error } = await supabase.from('activities').insert({
+        title: a.title,
+        summary: a.title,
+        type,
+        entity_type,
+        entity_id,
+        due_date: a.due_date || null,
+        occurred_at: a.due_date || new Date().toISOString(),
+        done: a.done === 'true' || a.done === '1' || a.done === true,
+        author_id: req.teamMember.id,
+      });
+
+      if (error) results.errors.push({ row: i + 1, error: error.message });
+      else results.created++;
+    } catch (err) {
+      results.errors.push({ row: i + 1, error: err.message });
+    }
+  }
+
+  res.json(results);
+});
+
 module.exports = router;
