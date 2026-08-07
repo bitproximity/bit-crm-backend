@@ -204,80 +204,107 @@ router.post('/import', async (req, res) => {
 
   const results = { created: 0, errors: [] };
 
-  for (const [i, d] of deals.entries()) {
-    try {
-      if (!d.title) {
-        results.errors.push({ row: i + 1, error: 'Falta el título del deal' });
-        continue;
-      }
+  // 1) Trae de una sola vez todas las empresas y contactos existentes,
+  // para no consultar la base fila por fila (eso es lo que lo hacía lento).
+  const [{ data: existingCompanies }, { data: existingContacts }] = await Promise.all([
+    supabase.from('companies').select('id, name'),
+    supabase.from('contacts').select('id, first_name, company_id'),
+  ]);
 
-      let company_id = null;
-      if (d.company_name) {
-        const { data: existing } = await supabase.from('companies').select('id').ilike('name', d.company_name).maybeSingle();
-        if (existing) company_id = existing.id;
-        else {
-          const { data: nc } = await supabase.from('companies').insert({ name: d.company_name }).select().single();
-          company_id = nc?.id || null;
-        }
-      }
+  const companyMap = new Map((existingCompanies || []).map((c) => [c.name.toLowerCase().trim(), c.id]));
+  const contactMap = new Map(
+    (existingContacts || []).map((c) => [`${c.first_name.toLowerCase().trim()}|${c.company_id || 'none'}`, c.id])
+  );
 
-      let contact_id = null;
-      if (d.contact_name) {
-        const [first_name, ...rest] = d.contact_name.split(' ');
-        const { data: existing } = await supabase
-          .from('contacts')
-          .select('id')
-          .ilike('first_name', first_name)
-          .eq('company_id', company_id)
-          .maybeSingle();
-        if (existing) contact_id = existing.id;
-        else {
-          const { data: nc } = await supabase
-            .from('contacts')
-            .insert({
-              first_name,
-              last_name: rest.join(' ') || null,
-              email: d.contact_email || null,
-              company_id,
-              owner_id: req.teamMember.id,
-              source: 'importado',
-            })
-            .select()
-            .single();
-          contact_id = nc?.id || null;
-        }
-      }
+  // 2) Junta los nombres de empresas/contactos nuevos que hacen falta crear (sin duplicados)
+  const newCompanyNames = new Set();
+  deals.forEach((d) => {
+    if (d.company_name && !companyMap.has(d.company_name.toLowerCase().trim())) {
+      newCompanyNames.add(d.company_name.trim());
+    }
+  });
 
-      const stage_id = (d.stage_name && stageByName[d.stage_name.toLowerCase().trim()]) || defaultStageId;
-      if (!stage_id) {
-        results.errors.push({ row: i + 1, error: 'El pipeline no tiene etapas configuradas' });
-        continue;
-      }
+  if (newCompanyNames.size > 0) {
+    const { data: createdCompanies } = await supabase
+      .from('companies')
+      .insert([...newCompanyNames].map((name) => ({ name })))
+      .select();
+    (createdCompanies || []).forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
+  }
 
-      const { data: deal, error } = await supabase
-        .from('deals')
-        .insert({
-          title: d.title,
-          value: Number(d.value) || 0,
-          currency: d.currency || 'USD',
-          probability: Number(d.probability) || 50,
-          pipeline_id,
-          stage_id,
-          contact_id,
-          company_id,
-          owner_id: req.teamMember.id,
-        })
-        .select()
-        .single();
+  const newContacts = new Map(); // key -> { first_name, last_name, email, company_id }
+  deals.forEach((d) => {
+    if (!d.contact_name) return;
+    const company_id = d.company_name ? companyMap.get(d.company_name.toLowerCase().trim()) : null;
+    const key = `${d.contact_name.split(' ')[0].toLowerCase().trim()}|${company_id || 'none'}`;
+    if (!contactMap.has(key) && !newContacts.has(key)) {
+      const [first_name, ...rest] = d.contact_name.split(' ');
+      newContacts.set(key, {
+        first_name,
+        last_name: rest.join(' ') || null,
+        email: d.contact_email || null,
+        company_id: company_id || null,
+        owner_id: req.teamMember.id,
+        source: 'importado',
+      });
+    }
+  });
 
-      if (error) {
-        results.errors.push({ row: i + 1, error: error.message });
-      } else {
-        results.created++;
-        await logAudit('deal', deal.id, 'created', req.teamMember.id, { via: 'import' });
-      }
-    } catch (err) {
-      results.errors.push({ row: i + 1, error: err.message });
+  if (newContacts.size > 0) {
+    const { data: createdContacts } = await supabase.from('contacts').insert([...newContacts.values()]).select();
+    (createdContacts || []).forEach((c) => {
+      contactMap.set(`${c.first_name.toLowerCase().trim()}|${c.company_id || 'none'}`, c.id);
+    });
+  }
+
+  // 3) Arma todos los deals de una vez y los inserta en un solo lote
+  const dealsToInsert = [];
+  deals.forEach((d, i) => {
+    if (!d.title) {
+      results.errors.push({ row: i + 1, error: 'Falta el título del deal' });
+      return;
+    }
+
+    const stage_id = (d.stage_name && stageByName[d.stage_name.toLowerCase().trim()]) || defaultStageId;
+    if (!stage_id) {
+      results.errors.push({ row: i + 1, error: 'El pipeline no tiene etapas configuradas' });
+      return;
+    }
+
+    const company_id = d.company_name ? companyMap.get(d.company_name.toLowerCase().trim()) || null : null;
+    const contact_id = d.contact_name
+      ? contactMap.get(`${d.contact_name.split(' ')[0].toLowerCase().trim()}|${company_id || 'none'}`) || null
+      : null;
+
+    dealsToInsert.push({
+      title: d.title,
+      value: Number(d.value) || 0,
+      currency: d.currency || 'USD',
+      probability: Number(d.probability) || 50,
+      pipeline_id,
+      stage_id,
+      contact_id,
+      company_id,
+      owner_id: req.teamMember.id,
+    });
+  });
+
+  if (dealsToInsert.length > 0) {
+    const { data: createdDeals, error } = await supabase.from('deals').insert(dealsToInsert).select();
+    if (error) {
+      results.errors.push({ row: 0, error: `Error insertando deals: ${error.message}` });
+    } else {
+      results.created = createdDeals.length;
+      // Auditoría en un solo lote también, en vez de una petición por deal
+      await supabase.from('audit_log').insert(
+        createdDeals.map((deal) => ({
+          entity_type: 'deal',
+          entity_id: deal.id,
+          action: 'created',
+          actor_id: req.teamMember.id,
+          changes: { via: 'import' },
+        }))
+      );
     }
   }
 

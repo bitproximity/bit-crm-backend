@@ -98,55 +98,57 @@ router.post('/import', async (req, res) => {
 
   const results = { created: 0, errors: [] };
 
-  for (const [i, c] of contacts.entries()) {
-    try {
-      if (!c.first_name) {
-        results.errors.push({ row: i + 1, error: 'Falta first_name' });
-        continue;
-      }
+  // Trae todas las empresas existentes de una vez (evita una consulta por fila)
+  const { data: existingCompanies } = await supabase.from('companies').select('id, name');
+  const companyMap = new Map((existingCompanies || []).map((c) => [c.name.toLowerCase().trim(), c.id]));
 
-      let company_id = null;
-      if (c.company_name) {
-        const { data: existing } = await supabase
-          .from('companies')
-          .select('id')
-          .ilike('name', c.company_name)
-          .maybeSingle();
+  const newCompanyNames = new Set();
+  contacts.forEach((c) => {
+    if (c.company_name && !companyMap.has(c.company_name.toLowerCase().trim())) {
+      newCompanyNames.add(c.company_name.trim());
+    }
+  });
 
-        if (existing) {
-          company_id = existing.id;
-        } else {
-          const { data: newCompany } = await supabase
-            .from('companies')
-            .insert({ name: c.company_name })
-            .select()
-            .single();
-          company_id = newCompany?.id || null;
-        }
-      }
+  if (newCompanyNames.size > 0) {
+    const { data: created } = await supabase
+      .from('companies')
+      .insert([...newCompanyNames].map((name) => ({ name })))
+      .select();
+    (created || []).forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
+  }
 
-      const { data: contact, error } = await supabase
-        .from('contacts')
-        .insert({
-          first_name: c.first_name,
-          last_name: c.last_name || null,
-          email: c.email || null,
-          phone: c.phone || null,
-          company_id,
-          source: c.source || 'importado',
-          owner_id: req.teamMember.id,
-        })
-        .select()
-        .single();
+  const contactsToInsert = [];
+  contacts.forEach((c, i) => {
+    if (!c.first_name) {
+      results.errors.push({ row: i + 1, error: 'Falta first_name' });
+      return;
+    }
+    contactsToInsert.push({
+      first_name: c.first_name,
+      last_name: c.last_name || null,
+      email: c.email || null,
+      phone: c.phone || null,
+      company_id: c.company_name ? companyMap.get(c.company_name.toLowerCase().trim()) || null : null,
+      source: c.source || 'importado',
+      owner_id: req.teamMember.id,
+    });
+  });
 
-      if (error) {
-        results.errors.push({ row: i + 1, error: error.message });
-      } else {
-        results.created++;
-        await logAudit('contact', contact.id, 'created', req.teamMember.id, { via: 'import' });
-      }
-    } catch (err) {
-      results.errors.push({ row: i + 1, error: err.message });
+  if (contactsToInsert.length > 0) {
+    const { data: createdContacts, error } = await supabase.from('contacts').insert(contactsToInsert).select();
+    if (error) {
+      results.errors.push({ row: 0, error: `Error insertando contactos: ${error.message}` });
+    } else {
+      results.created = createdContacts.length;
+      await supabase.from('audit_log').insert(
+        createdContacts.map((contact) => ({
+          entity_type: 'contact',
+          entity_id: contact.id,
+          action: 'created',
+          actor_id: req.teamMember.id,
+          changes: { via: 'import' },
+        }))
+      );
     }
   }
 
