@@ -5,6 +5,16 @@ const { requireAuth } = require('../middleware/auth');
 const router = express.Router();
 router.use(requireAuth);
 
+const CAL_API_VERSION = '2024-08-13';
+
+function calHeaders(apiKey) {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'cal-api-version': CAL_API_VERSION,
+    'Content-Type': 'application/json',
+  };
+}
+
 // GET /api/calcom/status
 router.get('/status', async (req, res) => {
   const { data } = await supabase
@@ -21,13 +31,18 @@ router.post('/connect', async (req, res) => {
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'Falta la API key' });
 
-  // Valida la key contra la API de Cal.com antes de guardarla.
-  // Nota: la API v1 de Cal.com no tiene endpoint /me — usamos /event-types,
-  // que siempre responde 200 para una key válida (aunque no tenga event types).
+  // Valida la key contra la API v2 de Cal.com antes de guardarla
   try {
-    const testRes = await fetch(`https://api.cal.com/v1/event-types?apiKey=${api_key}`);
-    if (!testRes.ok) return res.status(400).json({ error: 'API key inválida' });
+    const testRes = await fetch('https://api.cal.com/v2/event-types', {
+      headers: calHeaders(api_key),
+    });
+    if (!testRes.ok) {
+      const body = await testRes.text();
+      console.error('Cal.com validation failed:', testRes.status, body);
+      return res.status(400).json({ error: 'API key inválida o sin permisos' });
+    }
   } catch (err) {
+    console.error('Error validando Cal.com:', err);
     return res.status(500).json({ error: 'No se pudo validar la API key con Cal.com' });
   }
 
@@ -54,14 +69,24 @@ router.get('/bookings', async (req, res) => {
   if (!conn) return res.status(400).json({ error: 'No has conectado Cal.com todavía' });
 
   try {
-    const calRes = await fetch(`https://api.cal.com/v1/bookings?apiKey=${conn.api_key}&status=upcoming`);
-    const data = await calRes.json();
+    const calRes = await fetch('https://api.cal.com/v2/bookings?status=upcoming', {
+      headers: calHeaders(conn.api_key),
+    });
 
-    const bookings = (data.bookings || []).map((b) => ({
-      id: b.id,
+    if (!calRes.ok) {
+      const body = await calRes.text();
+      console.error('Error consultando Cal.com bookings:', calRes.status, body);
+      return res.status(502).json({ error: 'Cal.com devolvió un error consultando reservas' });
+    }
+
+    const data = await calRes.json();
+    const rawBookings = data.data || data.bookings || [];
+
+    const bookings = rawBookings.map((b) => ({
+      id: b.id || b.uid,
       title: b.title,
-      start: b.startTime,
-      end: b.endTime,
+      start: b.start || b.startTime,
+      end: b.end || b.endTime,
       attendees: (b.attendees || []).map((a) => a.email),
       status: b.status,
     }));
