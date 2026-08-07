@@ -25,6 +25,43 @@ router.post('/', requireRole('admin'), async (req, res) => {
   res.status(201).json(data);
 });
 
+// PATCH /api/pipelines/:id — renombrar pipeline
+router.patch('/:id', requireRole('admin'), async (req, res) => {
+  const { data, error } = await supabase
+    .from('pipelines')
+    .update(req.body)
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
+// DELETE /api/pipelines/:id — borra el pipeline (falla si tiene deals, por integridad referencial)
+router.delete('/:id', requireRole('admin'), async (req, res) => {
+  const { error } = await supabase.from('pipelines').delete().eq('id', req.params.id);
+  if (error) {
+    if (error.message.includes('foreign key') || error.code === '23503') {
+      return res.status(400).json({ error: 'No se puede borrar: tiene deals asociados. Muévelos o bórralos primero.' });
+    }
+    return res.status(400).json({ error: error.message });
+  }
+  res.status(204).send();
+});
+
+// DELETE /api/pipelines/stages/:stageId — borra una etapa (falla si tiene deals, por integridad referencial)
+router.delete('/stages/:stageId', requireRole('admin'), async (req, res) => {
+  const { error } = await supabase.from('pipeline_stages').delete().eq('id', req.params.stageId);
+  if (error) {
+    if (error.message.includes('foreign key') || error.code === '23503') {
+      return res.status(400).json({ error: 'No se puede borrar: hay deals en esta etapa. Muévelos primero.' });
+    }
+    return res.status(400).json({ error: error.message });
+  }
+  res.status(204).send();
+});
+
 // POST /api/pipelines/:id/stages — agregar etapa
 router.post('/:id/stages', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
