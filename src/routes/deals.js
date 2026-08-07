@@ -188,6 +188,102 @@ async function instantiateProjectFromTemplate({ templateId, dealId, companyId, o
   return project;
 }
 
+// POST /api/deals/import  { pipeline_id, deals: [{ title, value, currency, stage_name, contact_name, contact_email, company_name, probability }] }
+// Mapea stage_name al stage_id real del pipeline por nombre (case-insensitive).
+// Si contact_name/company_name no existen, los crea.
+router.post('/import', async (req, res) => {
+  const { pipeline_id, deals } = req.body;
+  if (!pipeline_id || !Array.isArray(deals) || deals.length === 0) {
+    return res.status(400).json({ error: 'Falta pipeline_id o el array de deals' });
+  }
+
+  const { data: stages } = await supabase.from('pipeline_stages').select('*').eq('pipeline_id', pipeline_id);
+  const stageByName = {};
+  (stages || []).forEach((s) => { stageByName[s.name.toLowerCase().trim()] = s.id; });
+  const defaultStageId = stages?.sort((a, b) => a.position - b.position)[0]?.id;
+
+  const results = { created: 0, errors: [] };
+
+  for (const [i, d] of deals.entries()) {
+    try {
+      if (!d.title) {
+        results.errors.push({ row: i + 1, error: 'Falta el título del deal' });
+        continue;
+      }
+
+      let company_id = null;
+      if (d.company_name) {
+        const { data: existing } = await supabase.from('companies').select('id').ilike('name', d.company_name).maybeSingle();
+        if (existing) company_id = existing.id;
+        else {
+          const { data: nc } = await supabase.from('companies').insert({ name: d.company_name }).select().single();
+          company_id = nc?.id || null;
+        }
+      }
+
+      let contact_id = null;
+      if (d.contact_name) {
+        const [first_name, ...rest] = d.contact_name.split(' ');
+        const { data: existing } = await supabase
+          .from('contacts')
+          .select('id')
+          .ilike('first_name', first_name)
+          .eq('company_id', company_id)
+          .maybeSingle();
+        if (existing) contact_id = existing.id;
+        else {
+          const { data: nc } = await supabase
+            .from('contacts')
+            .insert({
+              first_name,
+              last_name: rest.join(' ') || null,
+              email: d.contact_email || null,
+              company_id,
+              owner_id: req.teamMember.id,
+              source: 'importado',
+            })
+            .select()
+            .single();
+          contact_id = nc?.id || null;
+        }
+      }
+
+      const stage_id = (d.stage_name && stageByName[d.stage_name.toLowerCase().trim()]) || defaultStageId;
+      if (!stage_id) {
+        results.errors.push({ row: i + 1, error: 'El pipeline no tiene etapas configuradas' });
+        continue;
+      }
+
+      const { data: deal, error } = await supabase
+        .from('deals')
+        .insert({
+          title: d.title,
+          value: Number(d.value) || 0,
+          currency: d.currency || 'USD',
+          probability: Number(d.probability) || 50,
+          pipeline_id,
+          stage_id,
+          contact_id,
+          company_id,
+          owner_id: req.teamMember.id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        results.errors.push({ row: i + 1, error: error.message });
+      } else {
+        results.created++;
+        await logAudit('deal', deal.id, 'created', req.teamMember.id, { via: 'import' });
+      }
+    } catch (err) {
+      results.errors.push({ row: i + 1, error: err.message });
+    }
+  }
+
+  res.json(results);
+});
+
 // ── LÍNEAS DE PRODUCTO DEL DEAL ──────────────────────────────
 
 // GET /api/deals/:id/line-items
