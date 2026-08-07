@@ -191,6 +191,18 @@ async function instantiateProjectFromTemplate({ templateId, dealId, companyId, o
 // POST /api/deals/import  { pipeline_id, deals: [{ title, value, currency, stage_name, contact_name, contact_email, company_name, probability }] }
 // Mapea stage_name al stage_id real del pipeline por nombre (case-insensitive).
 // Si contact_name/company_name no existen, los crea.
+// Inserta un array grande en lotes (evita timeouts/payloads gigantes en Supabase)
+async function batchInsert(table, rows, chunkSize = 500) {
+  const inserted = [];
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { data, error } = await supabase.from(table).insert(chunk).select();
+    if (error) throw new Error(error.message);
+    inserted.push(...(data || []));
+  }
+  return inserted;
+}
+
 router.post('/import', async (req, res) => {
   const { pipeline_id, deals } = req.body;
   if (!pipeline_id || !Array.isArray(deals) || deals.length === 0) {
@@ -225,11 +237,8 @@ router.post('/import', async (req, res) => {
   });
 
   if (newCompanyNames.size > 0) {
-    const { data: createdCompanies } = await supabase
-      .from('companies')
-      .insert([...newCompanyNames].map((name) => ({ name })))
-      .select();
-    (createdCompanies || []).forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
+    const createdCompanies = await batchInsert('companies', [...newCompanyNames].map((name) => ({ name })));
+    createdCompanies.forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
   }
 
   const newContacts = new Map(); // key -> { first_name, last_name, email, company_id }
@@ -251,8 +260,8 @@ router.post('/import', async (req, res) => {
   });
 
   if (newContacts.size > 0) {
-    const { data: createdContacts } = await supabase.from('contacts').insert([...newContacts.values()]).select();
-    (createdContacts || []).forEach((c) => {
+    const createdContacts = await batchInsert('contacts', [...newContacts.values()]);
+    createdContacts.forEach((c) => {
       contactMap.set(`${c.first_name.toLowerCase().trim()}|${c.company_id || 'none'}`, c.id);
     });
   }
@@ -290,13 +299,12 @@ router.post('/import', async (req, res) => {
   });
 
   if (dealsToInsert.length > 0) {
-    const { data: createdDeals, error } = await supabase.from('deals').insert(dealsToInsert).select();
-    if (error) {
-      results.errors.push({ row: 0, error: `Error insertando deals: ${error.message}` });
-    } else {
+    try {
+      const createdDeals = await batchInsert('deals', dealsToInsert);
       results.created = createdDeals.length;
-      // Auditoría en un solo lote también, en vez de una petición por deal
-      await supabase.from('audit_log').insert(
+      // Auditoría también en lotes, no una petición por deal
+      await batchInsert(
+        'audit_log',
         createdDeals.map((deal) => ({
           entity_type: 'deal',
           entity_id: deal.id,
@@ -305,6 +313,8 @@ router.post('/import', async (req, res) => {
           changes: { via: 'import' },
         }))
       );
+    } catch (err) {
+      results.errors.push({ row: 0, error: `Error insertando deals: ${err.message}` });
     }
   }
 

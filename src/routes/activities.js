@@ -87,6 +87,18 @@ router.patch('/:id', async (req, res) => {
   res.json(data);
 });
 
+// Inserta un array grande en lotes (evita timeouts/payloads gigantes en Supabase)
+async function batchInsert(table, rows, chunkSize = 500) {
+  const inserted = [];
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { data, error } = await supabase.from(table).insert(chunk).select();
+    if (error) throw new Error(error.message);
+    inserted.push(...(data || []));
+  }
+  return inserted;
+}
+
 // POST /api/activities/import  { activities: [{ title, type, due_date, contact_name, deal_title, done }] }
 router.post('/import', async (req, res) => {
   const { activities } = req.body;
@@ -95,46 +107,58 @@ router.post('/import', async (req, res) => {
   }
 
   const results = { created: 0, errors: [] };
+  const validTypes = ['llamada', 'email', 'reunion', 'nota', 'whatsapp', 'tarea'];
 
-  for (const [i, a] of activities.entries()) {
+  // Trae de una sola vez todos los deals y contactos existentes, para
+  // enlazar por nombre sin consultar la base fila por fila.
+  const [{ data: allDeals }, { data: allContacts }] = await Promise.all([
+    supabase.from('deals').select('id, title'),
+    supabase.from('contacts').select('id, first_name'),
+  ]);
+
+  const dealByTitle = new Map((allDeals || []).map((d) => [d.title.toLowerCase().trim(), d.id]));
+  const contactByFirstName = new Map((allContacts || []).map((c) => [c.first_name.toLowerCase().trim(), c.id]));
+
+  const activitiesToInsert = [];
+  activities.forEach((a, i) => {
+    if (!a.title) {
+      results.errors.push({ row: i + 1, error: 'Falta el asunto' });
+      return;
+    }
+
+    let entity_type = null;
+    let entity_id = null;
+
+    if (a.deal_title) {
+      const dealId = dealByTitle.get(a.deal_title.toLowerCase().trim());
+      if (dealId) { entity_type = 'deal'; entity_id = dealId; }
+    }
+    if (!entity_id && a.contact_name) {
+      const contactId = contactByFirstName.get(a.contact_name.split(' ')[0].toLowerCase().trim());
+      if (contactId) { entity_type = 'contact'; entity_id = contactId; }
+    }
+
+    const type = validTypes.includes(a.type?.toLowerCase()) ? a.type.toLowerCase() : 'tarea';
+
+    activitiesToInsert.push({
+      title: a.title,
+      summary: a.title,
+      type,
+      entity_type,
+      entity_id,
+      due_date: a.due_date || null,
+      occurred_at: a.due_date || new Date().toISOString(),
+      done: a.done === 'true' || a.done === '1' || a.done === true,
+      author_id: req.teamMember.id,
+    });
+  });
+
+  if (activitiesToInsert.length > 0) {
     try {
-      if (!a.title) {
-        results.errors.push({ row: i + 1, error: 'Falta el asunto' });
-        continue;
-      }
-
-      let entity_type = null;
-      let entity_id = null;
-
-      if (a.deal_title) {
-        const { data: deal } = await supabase.from('deals').select('id').ilike('title', a.deal_title).maybeSingle();
-        if (deal) { entity_type = 'deal'; entity_id = deal.id; }
-      }
-      if (!entity_id && a.contact_name) {
-        const [first_name] = a.contact_name.split(' ');
-        const { data: contact } = await supabase.from('contacts').select('id').ilike('first_name', first_name).maybeSingle();
-        if (contact) { entity_type = 'contact'; entity_id = contact.id; }
-      }
-
-      const validTypes = ['llamada', 'email', 'reunion', 'nota', 'whatsapp', 'tarea'];
-      const type = validTypes.includes(a.type?.toLowerCase()) ? a.type.toLowerCase() : 'tarea';
-
-      const { error } = await supabase.from('activities').insert({
-        title: a.title,
-        summary: a.title,
-        type,
-        entity_type,
-        entity_id,
-        due_date: a.due_date || null,
-        occurred_at: a.due_date || new Date().toISOString(),
-        done: a.done === 'true' || a.done === '1' || a.done === true,
-        author_id: req.teamMember.id,
-      });
-
-      if (error) results.errors.push({ row: i + 1, error: error.message });
-      else results.created++;
+      const created = await batchInsert('activities', activitiesToInsert);
+      results.created = created.length;
     } catch (err) {
-      results.errors.push({ row: i + 1, error: err.message });
+      results.errors.push({ row: 0, error: `Error insertando actividades: ${err.message}` });
     }
   }
 

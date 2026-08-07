@@ -90,6 +90,18 @@ router.delete('/:id', async (req, res) => {
 
 // POST /api/contacts/import  { contacts: [{ first_name, last_name, email, phone, company_name, source }] }
 // Importación masiva desde CSV. Si company_name viene y no existe la empresa, la crea.
+// Inserta un array grande en lotes (evita timeouts/payloads gigantes en Supabase)
+async function batchInsert(table, rows, chunkSize = 500) {
+  const inserted = [];
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { data, error } = await supabase.from(table).insert(chunk).select();
+    if (error) throw new Error(error.message);
+    inserted.push(...(data || []));
+  }
+  return inserted;
+}
+
 router.post('/import', async (req, res) => {
   const { contacts } = req.body;
   if (!Array.isArray(contacts) || contacts.length === 0) {
@@ -110,11 +122,8 @@ router.post('/import', async (req, res) => {
   });
 
   if (newCompanyNames.size > 0) {
-    const { data: created } = await supabase
-      .from('companies')
-      .insert([...newCompanyNames].map((name) => ({ name })))
-      .select();
-    (created || []).forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
+    const created = await batchInsert('companies', [...newCompanyNames].map((name) => ({ name })));
+    created.forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
   }
 
   const contactsToInsert = [];
@@ -135,12 +144,11 @@ router.post('/import', async (req, res) => {
   });
 
   if (contactsToInsert.length > 0) {
-    const { data: createdContacts, error } = await supabase.from('contacts').insert(contactsToInsert).select();
-    if (error) {
-      results.errors.push({ row: 0, error: `Error insertando contactos: ${error.message}` });
-    } else {
+    try {
+      const createdContacts = await batchInsert('contacts', contactsToInsert);
       results.created = createdContacts.length;
-      await supabase.from('audit_log').insert(
+      await batchInsert(
+        'audit_log',
         createdContacts.map((contact) => ({
           entity_type: 'contact',
           entity_id: contact.id,
@@ -149,6 +157,8 @@ router.post('/import', async (req, res) => {
           changes: { via: 'import' },
         }))
       );
+    } catch (err) {
+      results.errors.push({ row: 0, error: `Error insertando contactos: ${err.message}` });
     }
   }
 
