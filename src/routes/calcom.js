@@ -21,9 +21,11 @@ router.post('/connect', async (req, res) => {
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'Falta la API key' });
 
-  // Valida la key contra la API de Cal.com antes de guardarla
+  // Valida la key contra la API de Cal.com antes de guardarla.
+  // Nota: la API v1 de Cal.com no tiene endpoint /me — usamos /event-types,
+  // que siempre responde 200 para una key válida (aunque no tenga event types).
   try {
-    const testRes = await fetch(`https://api.cal.com/v1/me?apiKey=${api_key}`);
+    const testRes = await fetch(`https://api.cal.com/v1/event-types?apiKey=${api_key}`);
     if (!testRes.ok) return res.status(400).json({ error: 'API key inválida' });
   } catch (err) {
     return res.status(500).json({ error: 'No se pudo validar la API key con Cal.com' });
