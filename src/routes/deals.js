@@ -26,10 +26,10 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
-  const [{ data: deal, error }, { data: history }, { data: tasks }] = await Promise.all([
+  const [{ data: deal, error }, { data: history }, { data: tasks }, { data: tagLinks }] = await Promise.all([
     supabase
       .from('deals')
-      .select('*, contacts(*), companies(*), pipeline_stages(*)')
+      .select('*, contacts(*), companies(*), pipeline_stages(*), team_members(id,full_name,role)')
       .eq('id', id)
       .single(),
     supabase
@@ -38,10 +38,20 @@ router.get('/:id', async (req, res) => {
       .eq('deal_id', id)
       .order('changed_at', { ascending: false }),
     supabase.from('tasks').select('*').eq('deal_id', id),
+    supabase.from('taggables').select('tags(*)').eq('entity_type', 'deal').eq('entity_id', id),
   ]);
 
   if (error) return res.status(404).json({ error: 'Deal no encontrado' });
-  res.json({ ...deal, history, tasks });
+  res.json({ ...deal, history, tasks, tags: (tagLinks || []).map((t) => t.tags) });
+});
+
+// DELETE /api/deals/:id
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  const { error } = await supabase.from('deals').delete().eq('id', id);
+  if (error) return res.status(400).json({ error: error.message });
+  await logAudit('deal', id, 'deleted', req.teamMember.id);
+  res.status(204).send();
 });
 
 router.post('/', async (req, res) => {
