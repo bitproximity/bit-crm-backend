@@ -165,6 +165,7 @@ router.get('/feed', async (req, res) => {
 // GET /api/insights/dashboard?year=2026 — panorama tipo "Avances" de Pipedrive
 router.get('/dashboard', async (req, res) => {
   const year = Number(req.query.year) || new Date().getFullYear();
+  const { pipeline_id } = req.query;
   const yearStart = `${year}-01-01T00:00:00.000Z`;
   const yearEnd = `${year + 1}-01-01T00:00:00.000Z`;
   const prevYearStart = `${year - 1}-01-01T00:00:00.000Z`;
@@ -173,9 +174,12 @@ router.get('/dashboard', async (req, res) => {
   const { data: pipelines } = await supabase.from('pipelines').select('id, name');
   const pipelineNameById = Object.fromEntries((pipelines || []).map((p) => [p.id, p.name]));
 
-  const { data: deals, error } = await supabase
+  let dealsQuery = supabase
     .from('deals')
     .select('id, value, currency, pipeline_id, status, created_at, closed_at, lost_reason');
+  if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
+
+  const { data: deals, error } = await dealsQuery;
 
   if (error) return res.status(500).json({ error: error.message });
 
