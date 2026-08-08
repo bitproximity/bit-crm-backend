@@ -7,11 +7,15 @@ router.use(requireAuth);
 
 // GET /api/documents/tree — árbol completo (id, title, parent_id) para armar el sidebar sin pedir contenido
 router.get('/tree', async (req, res) => {
-  const { data, error } = await supabase
+  const { deal_id } = req.query;
+  let query = supabase
     .from('documents')
-    .select('id, title, parent_id, space_id, position')
+    .select('id, title, parent_id, space_id, deal_id, position')
     .order('position');
 
+  if (deal_id) query = query.eq('deal_id', deal_id);
+
+  const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
