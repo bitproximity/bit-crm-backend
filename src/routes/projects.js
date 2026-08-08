@@ -51,7 +51,7 @@ router.get('/:id', async (req, res) => {
       supabase.from('projects').select('*, companies(*)').eq('id', id).single(),
       supabase
         .from('tasks')
-        .select('*, team_members(full_name)')
+        .select('*, team_members!tasks_assignee_id_fkey(full_name)')
         .eq('project_id', id)
         .order('position', { nullsFirst: true }),
     ]);

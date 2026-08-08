@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
 
   let query = supabase
     .from('tasks')
-    .select('*, projects(name), team_members(full_name), contacts(first_name,last_name)')
+    .select('*, projects(name), team_members!tasks_assignee_id_fkey(full_name), contacts(first_name,last_name)')
     .order('due_date', { ascending: true, nullsFirst: false });
 
   if (assignee_id) query = query.eq('assignee_id', assignee_id);
@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
   const [{ data: task, error }, { data: comments }, { data: subtasks }] = await Promise.all([
-    supabase.from('tasks').select('*, team_members(full_name)').eq('id', id).single(),
+    supabase.from('tasks').select('*, team_members!tasks_assignee_id_fkey(full_name)').eq('id', id).single(),
     supabase
       .from('task_comments')
       .select('*, team_members(full_name)')
