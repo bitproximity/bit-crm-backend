@@ -40,6 +40,7 @@ app.use('/api/calcom', require('./routes/calcom'));
 app.use('/api/mcp-keys', require('./routes/mcpKeys'));
 app.use('/api/spaces', require('./routes/spaces'));
 app.use('/api/documents', require('./routes/documents'));
+app.use('/api/invoices', require('./routes/invoices'));
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
