@@ -162,4 +162,95 @@ router.get('/feed', async (req, res) => {
   res.json(enriched);
 });
 
+// GET /api/insights/dashboard?year=2026 — panorama tipo "Avances" de Pipedrive
+router.get('/dashboard', async (req, res) => {
+  const year = Number(req.query.year) || new Date().getFullYear();
+  const yearStart = `${year}-01-01T00:00:00.000Z`;
+  const yearEnd = `${year + 1}-01-01T00:00:00.000Z`;
+  const prevYearStart = `${year - 1}-01-01T00:00:00.000Z`;
+  const prevYearEnd = `${year}-01-01T00:00:00.000Z`;
+
+  const { data: pipelines } = await supabase.from('pipelines').select('id, name');
+  const pipelineNameById = Object.fromEntries((pipelines || []).map((p) => [p.id, p.name]));
+
+  const { data: deals, error } = await supabase
+    .from('deals')
+    .select('id, value, currency, pipeline_id, status, created_at, closed_at, lost_reason');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const monthKey = (iso) => iso.slice(0, 7); // YYYY-MM
+  const monthLabel = (key) => {
+    const [, m] = key.split('-');
+    return ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][Number(m) - 1];
+  };
+  const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+
+  // ── Insights AI Report: valor de deals creados por mes, apilado por pipeline ──
+  const createdByMonth = {};
+  months.forEach((m) => { createdByMonth[m] = {}; });
+  (deals || []).forEach((d) => {
+    if (d.created_at < yearStart || d.created_at >= yearEnd) return;
+    const key = monthKey(d.created_at);
+    if (!createdByMonth[key]) return;
+    const pName = pipelineNameById[d.pipeline_id] || 'Sin pipeline';
+    createdByMonth[key][pName] = (createdByMonth[key][pName] || 0) + Number(d.value || 0);
+  });
+  const deals_by_month = months.map((m) => ({
+    month: m,
+    label: monthLabel(m),
+    total: Object.values(createdByMonth[m]).reduce((a, b) => a + b, 0),
+    by_pipeline: createdByMonth[m],
+  }));
+
+  // ── Deal duration: promedio de días entre creación y cierre (ganado/perdido) ──
+  const closedDeals = (deals || []).filter((d) => d.status !== 'abierto' && d.closed_at);
+  const avgDurationDays = closedDeals.length
+    ? Math.round(
+        (closedDeals.reduce((sum, d) => sum + (new Date(d.closed_at) - new Date(d.created_at)), 0) /
+          closedDeals.length) /
+          86400000
+      )
+    : 0;
+
+  // ── Deals lost by reasons ──
+  const lostDeals = (deals || []).filter((d) => d.status === 'perdido');
+  const reasonMap = {};
+  lostDeals.forEach((d) => {
+    const reason = d.lost_reason?.trim() || '(sin motivo)';
+    reasonMap[reason] = (reasonMap[reason] || 0) + 1;
+  });
+  const deals_lost_by_reason = Object.entries(reasonMap)
+    .map(([reason, count]) => ({ reason, count, pct: lostDeals.length ? Math.round((count / lostDeals.length) * 100) : 0 }))
+    .sort((a, b) => b.count - a.count);
+
+  // ── Average value of won deals: este año vs año anterior ──
+  const wonThisYear = (deals || []).filter((d) => d.status === 'ganado' && d.closed_at >= yearStart && d.closed_at < yearEnd);
+  const wonPrevYear = (deals || []).filter((d) => d.status === 'ganado' && d.closed_at >= prevYearStart && d.closed_at < prevYearEnd);
+  const avg = (arr) => (arr.length ? arr.reduce((sum, d) => sum + Number(d.value || 0), 0) / arr.length : 0);
+  const avgThisYear = avg(wonThisYear);
+  const avgPrevYear = avg(wonPrevYear);
+  const pctChange = avgPrevYear ? Math.round(((avgThisYear - avgPrevYear) / avgPrevYear) * 1000) / 10 : null;
+
+  // ── Deals won over time: valor de deals ganados por mes de cierre ──
+  const wonByMonth = {};
+  months.forEach((m) => { wonByMonth[m] = 0; });
+  wonThisYear.forEach((d) => {
+    const key = monthKey(d.closed_at);
+    if (wonByMonth[key] !== undefined) wonByMonth[key] += Number(d.value || 0);
+  });
+  const deals_won_by_month = months.map((m) => ({ month: m, label: monthLabel(m), value: wonByMonth[m] }));
+
+  res.json({
+    year,
+    pipelines: pipelines || [],
+    deals_by_month,
+    deal_duration_avg_days: avgDurationDays,
+    deals_lost_by_reason,
+    lost_total: lostDeals.length,
+    won_avg_value: { current: Math.round(avgThisYear), previous: Math.round(avgPrevYear), pct_change: pctChange, count: wonThisYear.length },
+    deals_won_by_month,
+  });
+});
+
 module.exports = router;
