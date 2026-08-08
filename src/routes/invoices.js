@@ -117,6 +117,55 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send();
 });
 
+async function recomputeInvoiceTotals(invoiceId) {
+  const [{ data: invoice }, { data: lineItems }] = await Promise.all([
+    supabase.from('invoices').select('tax, paid_amount').eq('id', invoiceId).single(),
+    supabase.from('invoice_line_items').select('quantity, unit_price').eq('invoice_id', invoiceId),
+  ]);
+  const subtotal = (lineItems || []).reduce((sum, li) => sum + Number(li.quantity) * Number(li.unit_price), 0);
+  const total = subtotal + Number(invoice?.tax || 0);
+  const newStatus = Number(invoice?.paid_amount || 0) >= total && total > 0 ? 'pagada' : Number(invoice?.paid_amount || 0) > 0 ? 'parcial' : undefined;
+  const update = { subtotal, total, updated_at: new Date().toISOString() };
+  if (newStatus) update.status = newStatus;
+  await supabase.from('invoices').update(update).eq('id', invoiceId);
+}
+
+// POST /api/invoices/:id/line-items  { product_id?, description, quantity, unit_price }
+router.post('/:id/line-items', async (req, res) => {
+  const { id } = req.params;
+  const { data, error } = await supabase
+    .from('invoice_line_items')
+    .insert({ invoice_id: id, ...req.body })
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+  await recomputeInvoiceTotals(id);
+  res.status(201).json(data);
+});
+
+// PATCH /api/invoices/:id/line-items/:itemId  { description?, quantity?, unit_price?, product_id? }
+router.patch('/:id/line-items/:itemId', async (req, res) => {
+  const { id, itemId } = req.params;
+  const { data, error } = await supabase
+    .from('invoice_line_items')
+    .update(req.body)
+    .eq('id', itemId)
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+  await recomputeInvoiceTotals(id);
+  res.json(data);
+});
+
+// DELETE /api/invoices/:id/line-items/:itemId
+router.delete('/:id/line-items/:itemId', async (req, res) => {
+  const { id, itemId } = req.params;
+  const { error } = await supabase.from('invoice_line_items').delete().eq('id', itemId);
+  if (error) return res.status(400).json({ error: error.message });
+  await recomputeInvoiceTotals(id);
+  res.status(204).send();
+});
+
 // POST /api/invoices/:id/payments  { amount, method?, notes?, paid_at? }
 // Registra un pago (parcial o total) y recalcula el estado de la factura.
 router.post('/:id/payments', async (req, res) => {
