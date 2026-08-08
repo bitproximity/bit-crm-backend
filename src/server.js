@@ -42,6 +42,7 @@ app.use('/api/spaces', require('./routes/spaces'));
 app.use('/api/documents', require('./routes/documents'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/deal-files', require('./routes/dealFiles'));
+app.use('/api/document-files', require('./routes/documentFiles'));
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
