@@ -33,14 +33,22 @@ router.get('/:id', async (req, res) => {
 
   if (error) return res.status(404).json({ error: 'Espacio no encontrado' });
 
-  const withProgress = await Promise.all(
-    (projects || []).map(async (p) => {
-      const { data: tasks } = await supabase.from('tasks').select('status').eq('project_id', p.id);
-      const total = tasks?.length || 0;
-      const done = tasks?.filter((t) => t.status === 'completada').length || 0;
-      return { ...p, progress_pct: total ? Math.round((done / total) * 100) : 0, total_tasks: total };
-    })
-  );
+  const projectIds = (projects || []).map((p) => p.id);
+  const { data: allTasks } = projectIds.length
+    ? await supabase.from('tasks').select('project_id, status').in('project_id', projectIds)
+    : { data: [] };
+
+  const statsByProject = {};
+  (allTasks || []).forEach((t) => {
+    const s = (statsByProject[t.project_id] ||= { total: 0, done: 0 });
+    s.total += 1;
+    if (t.status === 'completada') s.done += 1;
+  });
+
+  const withProgress = (projects || []).map((p) => {
+    const s = statsByProject[p.id] || { total: 0, done: 0 };
+    return { ...p, progress_pct: s.total ? Math.round((s.done / s.total) * 100) : 0, total_tasks: s.total };
+  });
 
   res.json({ ...space, projects: withProgress });
 });

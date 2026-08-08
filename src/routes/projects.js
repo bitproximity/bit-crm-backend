@@ -21,15 +21,24 @@ router.get('/', async (req, res) => {
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
 
-  // Agrega % de avance (tareas completadas / total) a cada proyecto
-  const withProgress = await Promise.all(
-    data.map(async (p) => {
-      const { data: tasks } = await supabase.from('tasks').select('status').eq('project_id', p.id);
-      const total = tasks?.length || 0;
-      const done = tasks?.filter((t) => t.status === 'completada').length || 0;
-      return { ...p, progress_pct: total ? Math.round((done / total) * 100) : 0, total_tasks: total };
-    })
-  );
+  // Trae el estado de TODAS las tareas de estos proyectos en una sola consulta
+  // (antes hacía una consulta por proyecto -> muy lento con muchos proyectos).
+  const projectIds = data.map((p) => p.id);
+  const { data: allTasks } = projectIds.length
+    ? await supabase.from('tasks').select('project_id, status').in('project_id', projectIds)
+    : { data: [] };
+
+  const statsByProject = {};
+  (allTasks || []).forEach((t) => {
+    const s = (statsByProject[t.project_id] ||= { total: 0, done: 0 });
+    s.total += 1;
+    if (t.status === 'completada') s.done += 1;
+  });
+
+  const withProgress = data.map((p) => {
+    const s = statsByProject[p.id] || { total: 0, done: 0 };
+    return { ...p, progress_pct: s.total ? Math.round((s.done / s.total) * 100) : 0, total_tasks: s.total };
+  });
 
   res.json(withProgress);
 });
