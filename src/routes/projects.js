@@ -45,30 +45,35 @@ router.get('/', async (req, res) => {
 
 // GET /api/projects/:id — incluye tareas anidadas (padres + subtareas)
 router.get('/:id', async (req, res) => {
-  const { id } = req.params;
-  const [{ data: project, error }, { data: tasks }] = await Promise.all([
-    supabase.from('projects').select('*, companies(*)').eq('id', id).single(),
-    supabase
-      .from('tasks')
-      .select('*, team_members(full_name)')
-      .eq('project_id', id)
-      .order('position'),
-  ]);
+  try {
+    const { id } = req.params;
+    const [{ data: project, error }, { data: tasks, error: tasksError }] = await Promise.all([
+      supabase.from('projects').select('*, companies(*)').eq('id', id).single(),
+      supabase
+        .from('tasks')
+        .select('*, team_members(full_name)')
+        .eq('project_id', id)
+        .order('position', { nullsFirst: true }),
+    ]);
 
-  if (error) return res.status(404).json({ error: 'Proyecto no encontrado' });
+    if (error) return res.status(404).json({ error: 'Proyecto no encontrado' });
+    if (tasksError) return res.status(500).json({ error: tasksError.message });
 
-  const byParent = {};
-  tasks.forEach((t) => {
-    const key = t.parent_task_id || 'root';
-    byParent[key] = byParent[key] || [];
-    byParent[key].push(t);
-  });
-  const withSubtasks = (byParent['root'] || []).map((t) => ({
-    ...t,
-    subtasks: byParent[t.id] || [],
-  }));
+    const byParent = {};
+    (tasks || []).forEach((t) => {
+      const key = t.parent_task_id || 'root';
+      byParent[key] = byParent[key] || [];
+      byParent[key].push(t);
+    });
+    const withSubtasks = (byParent['root'] || []).map((t) => ({
+      ...t,
+      subtasks: byParent[t.id] || [],
+    }));
 
-  res.json({ ...project, tasks: withSubtasks });
+    res.json({ ...project, tasks: withSubtasks });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Error inesperado cargando el proyecto' });
+  }
 });
 
 router.post('/', async (req, res) => {
