@@ -36,19 +36,28 @@ router.get('/', async (req, res) => {
 
   // Avance de proyectos activos (% de tareas completadas)
   const activeProjects = (projects || []).filter((p) => p.status === 'activo');
-  const progress = [];
-  for (const p of activeProjects) {
-    const { data: tasks } = await supabase.from('tasks').select('status').eq('project_id', p.id);
-    const total = tasks?.length || 0;
-    const done = tasks?.filter((t) => t.status === 'completada').length || 0;
-    progress.push({
+  const activeProjectIds = activeProjects.map((p) => p.id);
+  const { data: allProjectTasks } = activeProjectIds.length
+    ? await supabase.from('tasks').select('project_id, status').in('project_id', activeProjectIds)
+    : { data: [] };
+
+  const tasksByProject = {};
+  (allProjectTasks || []).forEach((t) => {
+    const s = (tasksByProject[t.project_id] ||= { total: 0, done: 0 });
+    s.total += 1;
+    if (t.status === 'completada') s.done += 1;
+  });
+
+  const progress = activeProjects.map((p) => {
+    const s = tasksByProject[p.id] || { total: 0, done: 0 };
+    return {
       project_id: p.id,
       name: p.name,
-      total_tasks: total,
-      completed_tasks: done,
-      progress_pct: total ? Math.round((done / total) * 100) : 0,
-    });
-  }
+      total_tasks: s.total,
+      completed_tasks: s.done,
+      progress_pct: s.total ? Math.round((s.done / s.total) * 100) : 0,
+    };
+  });
 
   // Win rate
   const won = (wonLost || []).filter((d) => d.status === 'ganado').length;
