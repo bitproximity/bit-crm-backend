@@ -44,6 +44,7 @@ app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/deal-files', require('./routes/dealFiles'));
 app.use('/api/document-files', require('./routes/documentFiles'));
 app.use('/api/b2b', require('./routes/b2b'));
+app.use('/api/public/b2b', require('./routes/publicB2b'));
 
 // ── Servidor MCP: conecta Claude Desktop/API a Bit CRM ──
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');

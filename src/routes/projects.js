@@ -7,7 +7,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/', async (req, res) => {
-  const { status, type, owner_id } = req.query;
+  const { status, type, owner_id, is_b2b } = req.query;
 
   let query = supabase
     .from('projects')
@@ -17,6 +17,7 @@ router.get('/', async (req, res) => {
   if (status) query = query.eq('status', status);
   if (type) query = query.eq('type', type);
   if (owner_id) query = query.eq('owner_id', owner_id);
+  if (is_b2b) query = query.eq('is_b2b', is_b2b === 'true');
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
