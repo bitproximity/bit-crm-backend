@@ -1,6 +1,30 @@
 const supabase = require('../config/supabase');
 const crypto = require('crypto');
 
+// Evita repetir la validación (2 round-trips de red) cuando el mismo token hace
+// varias llamadas casi simultáneas — cada pantalla del CRM dispara varias de una vez.
+const AUTH_CACHE_TTL_MS = 60 * 1000;
+const authCache = new Map(); // token -> { teamMember, expiresAt }
+
+function getCached(token) {
+  const entry = authCache.get(token);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    authCache.delete(token);
+    return null;
+  }
+  return entry.teamMember;
+}
+
+function setCached(token, teamMember) {
+  authCache.set(token, { teamMember, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+  // Evita que el Map crezca sin límite en un proceso de larga duración
+  if (authCache.size > 500) {
+    const oldestKey = authCache.keys().next().value;
+    authCache.delete(oldestKey);
+  }
+}
+
 /**
  * Verifica el JWT de Supabase Auth O una API key de MCP (para Claude Desktop/API)
  * enviados en el header Authorization, y adjunta el perfil interno (team_members)
@@ -13,6 +37,13 @@ async function requireAuth(req, res, next) {
 
     if (!token) {
       return res.status(401).json({ error: 'Falta token de autenticación' });
+    }
+
+    const cached = getCached(token);
+    if (cached) {
+      if (!cached.active) return res.status(403).json({ error: 'Usuario desactivado' });
+      req.teamMember = cached;
+      return next();
     }
 
     // Las API keys de MCP tienen el prefijo 'bitcrm_mcp_' — se validan aparte del JWT
@@ -33,6 +64,7 @@ async function requireAuth(req, res, next) {
       supabase.from('mcp_api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', apiKey.id).then(() => {});
 
       req.teamMember = apiKey.team_members;
+      setCached(token, apiKey.team_members);
       return next();
     }
 
@@ -56,6 +88,7 @@ async function requireAuth(req, res, next) {
     }
 
     req.teamMember = member;
+    setCached(token, member);
     next();
   } catch (err) {
     console.error('Error en requireAuth:', err);
