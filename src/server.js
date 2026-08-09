@@ -44,6 +44,24 @@ app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/deal-files', require('./routes/dealFiles'));
 app.use('/api/document-files', require('./routes/documentFiles'));
 
+// ── Servidor MCP: conecta Claude Desktop/API a Bit CRM ──
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+const { buildServer } = require('./mcp/server');
+const { requireAuth: mcpAuth } = require('./middleware/auth');
+
+app.post('/mcp', mcpAuth, async (req, res) => {
+  try {
+    const server = buildServer(req.teamMember);
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    res.on('close', () => transport.close());
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error('Error en /mcp:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Error interno del servidor MCP' });
+  }
+});
+
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
   console.error('Error no manejado:', err);
