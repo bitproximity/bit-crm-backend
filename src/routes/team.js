@@ -22,21 +22,48 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
   const { full_name, email, role } = req.body;
   if (!full_name || !email) return res.status(400).json({ error: 'Falta nombre o correo' });
 
+  const { data: existingProfile } = await supabase.from('team_members').select('id').eq('email', email).maybeSingle();
+  if (existingProfile) return res.status(400).json({ error: 'Ya existe un perfil de equipo con ese correo.' });
+
+  let authUserId;
   const { data: authUser, error: authError } = await supabase.auth.admin.inviteUserByEmail(email, {
     redirectTo: process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',')[0] : undefined,
   });
 
-  if (authError) return res.status(400).json({ error: `No se pudo enviar la invitación: ${authError.message}` });
+  if (authError) {
+    // El correo ya tiene una cuenta en Supabase Auth (ej. intentó entrar con Google antes
+    // de ser invitado). En vez de fallar, reutilizamos esa cuenta y le mandamos un link
+    // para poner su contraseña, así queda con acceso igual.
+    const alreadyRegistered = /already.*registered/i.test(authError.message);
+    if (!alreadyRegistered) {
+      return res.status(400).json({ error: `No se pudo enviar la invitación: ${authError.message}` });
+    }
+
+    const { data: userList, error: listError } = await supabase.auth.admin.listUsers();
+    if (listError) return res.status(400).json({ error: `No se pudo ubicar la cuenta existente: ${listError.message}` });
+
+    const found = userList.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+    if (!found) return res.status(400).json({ error: 'El correo ya está registrado en Auth, pero no lo pude ubicar. Contacta soporte.' });
+    authUserId = found.id;
+
+    await supabase.auth.admin.generateLink({
+      type: 'recovery',
+      email,
+      options: { redirectTo: process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',')[0] : undefined },
+    }).catch(() => {}); // best-effort: si falla el link, igual queda con acceso y puede usar "olvidé mi contraseña"
+  } else {
+    authUserId = authUser.user.id;
+  }
 
   const { data: member, error } = await supabase
     .from('team_members')
-    .insert({ full_name, email, role: role || 'vendedor', active: true, auth_user_id: authUser.user.id })
+    .insert({ full_name, email, role: role || 'vendedor', active: true, auth_user_id: authUserId })
     .select()
     .single();
 
   if (error) {
-    // Si falla la creación del perfil, no dejamos un usuario de Auth huérfano
-    await supabase.auth.admin.deleteUser(authUser.user.id);
+    // Si falla la creación del perfil y el usuario de Auth se creó recién (no existía antes), no lo dejamos huérfano
+    if (!authError) await supabase.auth.admin.deleteUser(authUserId);
     return res.status(400).json({ error: error.message });
   }
 
