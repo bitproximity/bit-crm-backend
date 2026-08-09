@@ -1,10 +1,12 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requirePage('__admin_only__'));
 
 router.get('/', async (req, res) => {
   const { search, page = 1, limit = 50 } = req.query;

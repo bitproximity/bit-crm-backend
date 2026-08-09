@@ -1,10 +1,12 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requirePage('__admin_only__'));
 
 function withOverdueFlag(inv) {
   const overdue = inv.status !== 'pagada' && inv.status !== 'cancelada' && inv.due_date && inv.due_date < new Date().toISOString().slice(0, 10);

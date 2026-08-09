@@ -2,10 +2,12 @@ const express = require('express');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requirePage('b2b'));
 
 // GET /api/b2b/clients — empresas marcadas como clientes del servicio
 router.get('/clients', async (req, res) => {

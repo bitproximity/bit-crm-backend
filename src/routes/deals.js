@@ -1,10 +1,12 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requirePage('deals'));
 
 // GET /api/deals?pipeline_id=&owner_id=&status=
 router.get('/', async (req, res) => {

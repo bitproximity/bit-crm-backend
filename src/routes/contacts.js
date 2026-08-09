@@ -1,10 +1,12 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requirePage('__admin_only__'));
 
 // GET /api/contacts?status=&owner_id=&search=&page=&limit=
 router.get('/', async (req, res) => {

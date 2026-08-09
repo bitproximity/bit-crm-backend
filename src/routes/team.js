@@ -57,7 +57,7 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
 
   const { data: member, error } = await supabase
     .from('team_members')
-    .insert({ full_name, email, role: role || 'vendedor', active: true, auth_user_id: authUserId })
+    .insert({ full_name, email, role: role || 'operaciones', active: true, auth_user_id: authUserId })
     .select()
     .single();
 
