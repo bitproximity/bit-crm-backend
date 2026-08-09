@@ -8,22 +8,21 @@ const router = express.Router();
 router.get('/:token', async (req, res) => {
   const { token } = req.params;
 
-  const { data: project, error } = await supabase
-    .from('projects')
-    .select('id, name, companies(name)')
+  const { data: company, error } = await supabase
+    .from('companies')
+    .select('id, name')
     .eq('b2b_share_token', token)
     .single();
 
-  if (error || !project) return res.status(404).json({ error: 'Link no válido o expirado.' });
+  if (error || !company) return res.status(404).json({ error: 'Link no válido o expirado.' });
 
   const { data: records } = await supabase
     .from('b2b_records')
     .select('target_company, target_contact, industry, country, meeting_date, status')
-    .eq('project_id', project.id);
+    .eq('client_company_id', company.id);
 
   res.json({
-    project_name: project.name,
-    client_name: project.companies?.name || null,
+    client_name: company.name,
     ...computeB2bDashboard(records || []),
     records: (records || []).sort((a, b) => (b.meeting_date || '').localeCompare(a.meeting_date || '')),
   });
