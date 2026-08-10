@@ -24,6 +24,7 @@ function getClient() {
 
 // Envía un correo transaccional simple vía SES. No lanza si falla (best-effort) —
 // las notificaciones nunca deben tumbar la acción principal (ej. crear un comentario).
+// Devuelve { ok: true } o { ok: false, error: '<motivo real de AWS>' }.
 async function sendEmail({ to, subject, html, text }) {
   try {
     const command = new SendEmailCommand({
@@ -38,10 +39,10 @@ async function sendEmail({ to, subject, html, text }) {
       },
     });
     await getClient().send(command);
-    return true;
+    return { ok: true };
   } catch (err) {
     console.error('Error enviando correo vía SES:', err.message);
-    return false;
+    return { ok: false, error: err.message };
   }
 }
 

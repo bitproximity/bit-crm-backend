@@ -43,7 +43,7 @@ async function createAndSendAccessLink({ type, email, fullName }) {
     `,
   });
 
-  if (!sent) return { error: { message: 'El link se generó pero no se pudo enviar el correo por SES.' } };
+  if (!sent.ok) return { error: { message: `El link se generó pero no se pudo enviar el correo por SES: ${sent.error}` } };
   return { data, actionLink };
 }
 
