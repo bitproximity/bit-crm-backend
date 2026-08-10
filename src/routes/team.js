@@ -90,6 +90,10 @@ router.post('/:id/resend-access', requireRole('admin'), async (req, res) => {
   const existing = userList.users.find((u) => u.email?.toLowerCase() === member.email.toLowerCase());
 
   if (existing) {
+    // team_members.auth_user_id apunta a esta cuenta — hay que desvincularla primero,
+    // si no Supabase rechaza el borrado por la restricción de la base de datos.
+    await supabase.from('team_members').update({ auth_user_id: null }).eq('id', req.params.id);
+
     const { error: deleteError } = await supabase.auth.admin.deleteUser(existing.id);
     if (deleteError) {
       return res.status(400).json({ error: `No se pudo borrar la cuenta anterior para regenerar el acceso: ${deleteError.message}` });
