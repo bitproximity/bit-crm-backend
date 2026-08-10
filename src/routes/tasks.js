@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
 const { sendEmail } = require('../utils/email');
+const { syncTaskToCalendar, deleteTaskFromCalendar } = require('../utils/googleCalendarSync');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -52,6 +53,8 @@ router.post('/', async (req, res) => {
 
   await logAudit('task', data.id, 'created', req.teamMember.id);
   res.status(201).json(data);
+
+  syncTaskToCalendar(data); // no bloquea la respuesta
 });
 
 router.patch('/:id', async (req, res) => {
@@ -72,15 +75,23 @@ router.patch('/:id', async (req, res) => {
   const action = 'assignee_id' in req.body ? 'assigned' : 'status' in req.body ? 'status_changed' : 'updated';
   await logAudit('task', id, action, req.teamMember.id, { fields: Object.keys(req.body) });
   res.json(data);
+
+  // Si cambió fecha, responsable, estado o título, refleja el cambio en Google Calendar
+  const relevantFields = ['due_date', 'assignee_id', 'status', 'title', 'priority'];
+  if (relevantFields.some((f) => f in req.body)) syncTaskToCalendar(data);
 });
 
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  const { data: task } = await supabase.from('tasks').select('assignee_id, google_event_id').eq('id', id).single();
+
   const { error } = await supabase.from('tasks').delete().eq('id', id);
   if (error) return res.status(400).json({ error: error.message });
 
   await logAudit('task', id, 'deleted', req.teamMember.id);
   res.status(204).send();
+
+  if (task) deleteTaskFromCalendar(task);
 });
 
 // POST /api/tasks/:id/comments
