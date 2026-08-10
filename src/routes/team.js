@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { sendEmail } = require('../utils/email');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -9,6 +10,42 @@ router.use(requireAuth);
 // orden de FRONTEND_ORIGIN (que puede tener varios dominios viejos mezclados) —
 // así un link nunca vuelve a apuntar a un deploy abandonado.
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
+
+// Genera el link de acceso (invite o recovery) con Supabase, pero el correo lo manda
+// nuestro propio motor por Amazon SES — no dependemos del sistema de correo de
+// Supabase (que tiene un límite muy bajo en el plan gratuito) para nada.
+async function createAndSendAccessLink({ type, email, fullName }) {
+  const { data, error } = await supabase.auth.admin.generateLink({
+    type,
+    email,
+    options: { redirectTo: PUBLIC_APP_URL },
+  });
+  if (error) return { error };
+
+  const actionLink = data?.properties?.action_link;
+  if (!actionLink) return { error: { message: 'Supabase no devolvió un link de acceso.' } };
+
+  const isInvite = type === 'invite';
+  const sent = await sendEmail({
+    to: email,
+    subject: isInvite ? 'Te invitaron a Bit CRM' : 'Accede a tu cuenta de Bit CRM',
+    html: `
+      <div style="font-family: sans-serif; color: #1a1a2e; max-width: 480px;">
+        <p>Hola${fullName ? ` ${fullName}` : ''},</p>
+        <p>${isInvite ? 'Te dieron acceso al CRM de Bit Proximity. Crea tu contraseña para entrar:' : 'Usa este link para entrar a tu cuenta del CRM de Bit Proximity:'}</p>
+        <p style="margin: 20px 0;">
+          <a href="${actionLink}" style="background: linear-gradient(90deg,#8500FF,#E000FF); color: #fff; padding: 10px 20px; border-radius: 8px; text-decoration: none; display: inline-block;">
+            ${isInvite ? 'Crear mi contraseña' : 'Entrar al CRM'}
+          </a>
+        </p>
+        <p style="color:#888; font-size: 12px;">Si el botón no funciona, copia este link: ${actionLink}</p>
+      </div>
+    `,
+  });
+
+  if (!sent) return { error: { message: 'El link se generó pero no se pudo enviar el correo por SES.' } };
+  return { data, actionLink };
+}
 
 router.get('/', async (req, res) => {
   const { data, error } = await supabase
@@ -21,7 +58,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/team/invite  { full_name, email, role }
-// Crea el login real en Supabase Auth (manda correo de invitación) + el perfil en team_members.
+// Crea el login real en Supabase Auth + manda el correo de invitación por nuestro propio SES.
 // Solo admin puede invitar.
 router.post('/invite', requireRole('admin'), async (req, res) => {
   const { full_name, email, role } = req.body;
@@ -31,18 +68,15 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
   if (existingProfile) return res.status(400).json({ error: 'Ya existe un perfil de equipo con ese correo.' });
 
   let authUserId;
-  const { data: authUser, error: authError } = await supabase.auth.admin.inviteUserByEmail(email, {
-    redirectTo: PUBLIC_APP_URL,
-  });
+  let result = await createAndSendAccessLink({ type: 'invite', email, fullName: full_name });
 
-  if (authError) {
+  if (result.error) {
     // El correo ya tiene una cuenta en Supabase Auth (ej. intentó entrar con Google antes
-    // de ser invitado). En vez de fallar, reutilizamos esa cuenta y le mandamos un correo
-    // real de recuperación de contraseña (generateLink() NO manda correo por sí solo,
-    // solo genera el link — por eso usamos resetPasswordForEmail, que sí lo envía).
-    const alreadyRegistered = /already.*registered/i.test(authError.message);
+    // de ser invitado). En vez de fallar, reutilizamos esa cuenta y le mandamos un link
+    // de acceso normal.
+    const alreadyRegistered = /already.*registered/i.test(result.error.message);
     if (!alreadyRegistered) {
-      return res.status(400).json({ error: `No se pudo enviar la invitación: ${authError.message}` });
+      return res.status(400).json({ error: `No se pudo crear el acceso: ${result.error.message}` });
     }
 
     const { data: userList, error: listError } = await supabase.auth.admin.listUsers();
@@ -52,10 +86,10 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
     if (!found) return res.status(400).json({ error: 'El correo ya está registrado en Auth, pero no lo pude ubicar. Contacta soporte.' });
     authUserId = found.id;
 
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: PUBLIC_APP_URL });
-    if (resetError) console.error('No se pudo enviar el correo de recuperación:', resetError.message);
+    result = await createAndSendAccessLink({ type: 'magiclink', email, fullName: full_name });
+    if (result.error) console.error('No se pudo enviar el link de acceso:', result.error.message);
   } else {
-    authUserId = authUser.user.id;
+    authUserId = result.data.user.id;
   }
 
   const { data: member, error } = await supabase
@@ -66,7 +100,7 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
 
   if (error) {
     // Si falla la creación del perfil y el usuario de Auth se creó recién (no existía antes), no lo dejamos huérfano
-    if (!authError) await supabase.auth.admin.deleteUser(authUserId);
+    if (!existingProfile) await supabase.auth.admin.deleteUser(authUserId).catch(() => {});
     return res.status(400).json({ error: error.message });
   }
 
@@ -79,7 +113,7 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
 // "expirado" del lado del link) si la cuenta sigue existiendo, así que la única forma
 // confiable de garantizar un link realmente nuevo es partir de una cuenta nueva.
 router.post('/:id/resend-access', requireRole('admin'), async (req, res) => {
-  const { data: member } = await supabase.from('team_members').select('email, auth_user_id').eq('id', req.params.id).single();
+  const { data: member } = await supabase.from('team_members').select('full_name, email, auth_user_id').eq('id', req.params.id).single();
   if (!member) return res.status(404).json({ error: 'Miembro no encontrado' });
 
   // No confiamos solo en el auth_user_id guardado (puede estar desactualizado) —
@@ -100,13 +134,10 @@ router.post('/:id/resend-access', requireRole('admin'), async (req, res) => {
     }
   }
 
-  const { data: authUser, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(member.email, {
-    redirectTo: PUBLIC_APP_URL,
-  });
+  const result = await createAndSendAccessLink({ type: 'invite', email: member.email, fullName: member.full_name });
+  if (result.error) return res.status(400).json({ error: `No se pudo crear el nuevo acceso: ${result.error.message}` });
 
-  if (inviteError) return res.status(400).json({ error: `No se pudo crear la nueva invitación: ${inviteError.message}` });
-
-  await supabase.from('team_members').update({ auth_user_id: authUser.user.id }).eq('id', req.params.id);
+  await supabase.from('team_members').update({ auth_user_id: result.data.user.id }).eq('id', req.params.id);
 
   res.json({ sent: true, method: 'invite' });
 });
