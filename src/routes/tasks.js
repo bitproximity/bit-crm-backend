@@ -94,6 +94,21 @@ router.delete('/:id', async (req, res) => {
   if (task) deleteTaskFromCalendar(task);
 });
 
+// POST /api/tasks/:id/sync-calendar — sincroniza manualmente y devuelve el resultado real
+// (útil para diagnosticar por qué una tarea no aparece en Google Calendar)
+router.post('/:id/sync-calendar', async (req, res) => {
+  const { data: task, error } = await supabase
+    .from('tasks')
+    .select('*, team_members!tasks_assignee_id_fkey(full_name)')
+    .eq('id', req.params.id)
+    .single();
+
+  if (error) return res.status(404).json({ error: 'Tarea no encontrada' });
+
+  const result = await syncTaskToCalendar(task);
+  res.json(result);
+});
+
 // POST /api/tasks/:id/comments
 router.post('/:id/comments', async (req, res) => {
   const { id } = req.params;

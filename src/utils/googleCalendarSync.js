@@ -19,14 +19,14 @@ async function getCalendarClientForUser(teamMemberId) {
 }
 
 // Crea, actualiza o borra el evento de Google Calendar de una tarea, según corresponda.
-// Best-effort: nunca lanza — que Google Calendar esté caído o desconectado no debe
-// tumbar la creación/edición de la tarea en el CRM.
+// Devuelve { ok: true, ... } o { ok: false, reason: '<motivo>' } — nunca lanza, para que
+// el llamado "en segundo plano" (fire-and-forget) nunca tumbe la creación/edición de la tarea.
 async function syncTaskToCalendar(task) {
   try {
-    if (!task.assignee_id) return;
+    if (!task.assignee_id) return { ok: false, reason: 'La tarea no tiene responsable asignado.' };
 
     const calendar = await getCalendarClientForUser(task.assignee_id);
-    if (!calendar) return;
+    if (!calendar) return { ok: false, reason: 'El responsable de la tarea no tiene su Google conectado (Mi Perfil → Gmail + Google Calendar).' };
 
     const shouldHaveEvent = !!task.due_date && task.status !== 'completada';
 
@@ -35,7 +35,7 @@ async function syncTaskToCalendar(task) {
         await calendar.events.delete({ calendarId: 'primary', eventId: task.google_event_id }).catch(() => {});
         await supabase.from('tasks').update({ google_event_id: null }).eq('id', task.id);
       }
-      return;
+      return { ok: false, reason: !task.due_date ? 'La tarea no tiene fecha límite.' : 'La tarea ya está completada.' };
     }
 
     const start = new Date(task.due_date);
@@ -67,8 +67,11 @@ async function syncTaskToCalendar(task) {
       const { data } = await calendar.events.insert({ calendarId: 'primary', requestBody: eventBody });
       await supabase.from('tasks').update({ google_event_id: data.id }).eq('id', task.id);
     }
+
+    return { ok: true };
   } catch (err) {
-    console.error('Error sincronizando tarea con Google Calendar:', err.message);
+    console.error('Error sincronizando tarea con Google Calendar:', task.id, err.message);
+    return { ok: false, reason: err.message };
   }
 }
 
