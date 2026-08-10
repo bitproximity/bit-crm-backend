@@ -73,28 +73,28 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
   res.status(201).json(member);
 });
 
-// POST /api/team/:id/resend-access — reenvía el correo de acceso a alguien que YA tiene
-// perfil (link expirado, nunca le llegó, etc.). No crea un perfil nuevo.
+// POST /api/team/:id/resend-access — reenvía el acceso a alguien que YA tiene perfil
+// (link expirado, nunca le llegó, etc.). Borra su cuenta de Auth vieja y crea una
+// completamente nueva: Supabase a veces reutiliza el mismo token (aunque haya
+// "expirado" del lado del link) si la cuenta sigue existiendo, así que la única forma
+// confiable de garantizar un link realmente nuevo es partir de una cuenta nueva.
 router.post('/:id/resend-access', requireRole('admin'), async (req, res) => {
   const { data: member } = await supabase.from('team_members').select('email, auth_user_id').eq('id', req.params.id).single();
   if (!member) return res.status(404).json({ error: 'Miembro no encontrado' });
 
-  // Primero intenta re-invitar (funciona si la cuenta nunca terminó de confirmarse,
-  // que es el caso más común: link vencido o que nunca llegó).
-  const { error: inviteError } = await supabase.auth.admin.inviteUserByEmail(member.email, {
+  if (member.auth_user_id) {
+    await supabase.auth.admin.deleteUser(member.auth_user_id).catch(() => {});
+  }
+
+  const { data: authUser, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(member.email, {
     redirectTo: PUBLIC_APP_URL,
   });
 
-  if (!inviteError) return res.json({ sent: true, method: 'invite' });
+  if (inviteError) return res.status(400).json({ error: inviteError.message });
 
-  // Si ya confirmó su cuenta antes, cae acá: le mandamos un correo real de recuperación.
-  const alreadyRegistered = /already.*registered/i.test(inviteError.message);
-  if (!alreadyRegistered) return res.status(400).json({ error: inviteError.message });
+  await supabase.from('team_members').update({ auth_user_id: authUser.user.id }).eq('id', req.params.id);
 
-  const { error: resetError } = await supabase.auth.resetPasswordForEmail(member.email, { redirectTo: PUBLIC_APP_URL });
-  if (resetError) return res.status(400).json({ error: resetError.message });
-
-  res.json({ sent: true, method: 'recovery' });
+  res.json({ sent: true, method: 'invite' });
 });
 
 // Solo admin invita/crea miembros nuevos (el alta de auth se hace en Supabase Auth aparte)
