@@ -5,6 +5,11 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const router = express.Router();
 router.use(requireAuth);
 
+// Dominio fijo para los links de correo (invitación, recuperación). No depende del
+// orden de FRONTEND_ORIGIN (que puede tener varios dominios viejos mezclados) —
+// así un link nunca vuelve a apuntar a un deploy abandonado.
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
+
 router.get('/', async (req, res) => {
   const { data, error } = await supabase
     .from('team_members')
@@ -27,13 +32,14 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
 
   let authUserId;
   const { data: authUser, error: authError } = await supabase.auth.admin.inviteUserByEmail(email, {
-    redirectTo: process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',')[0] : undefined,
+    redirectTo: PUBLIC_APP_URL,
   });
 
   if (authError) {
     // El correo ya tiene una cuenta en Supabase Auth (ej. intentó entrar con Google antes
-    // de ser invitado). En vez de fallar, reutilizamos esa cuenta y le mandamos un link
-    // para poner su contraseña, así queda con acceso igual.
+    // de ser invitado). En vez de fallar, reutilizamos esa cuenta y le mandamos un correo
+    // real de recuperación de contraseña (generateLink() NO manda correo por sí solo,
+    // solo genera el link — por eso usamos resetPasswordForEmail, que sí lo envía).
     const alreadyRegistered = /already.*registered/i.test(authError.message);
     if (!alreadyRegistered) {
       return res.status(400).json({ error: `No se pudo enviar la invitación: ${authError.message}` });
@@ -46,11 +52,8 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
     if (!found) return res.status(400).json({ error: 'El correo ya está registrado en Auth, pero no lo pude ubicar. Contacta soporte.' });
     authUserId = found.id;
 
-    await supabase.auth.admin.generateLink({
-      type: 'recovery',
-      email,
-      options: { redirectTo: process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',')[0] : undefined },
-    }).catch(() => {}); // best-effort: si falla el link, igual queda con acceso y puede usar "olvidé mi contraseña"
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: PUBLIC_APP_URL });
+    if (resetError) console.error('No se pudo enviar el correo de recuperación:', resetError.message);
   } else {
     authUserId = authUser.user.id;
   }
@@ -68,6 +71,30 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
   }
 
   res.status(201).json(member);
+});
+
+// POST /api/team/:id/resend-access — reenvía el correo de acceso a alguien que YA tiene
+// perfil (link expirado, nunca le llegó, etc.). No crea un perfil nuevo.
+router.post('/:id/resend-access', requireRole('admin'), async (req, res) => {
+  const { data: member } = await supabase.from('team_members').select('email, auth_user_id').eq('id', req.params.id).single();
+  if (!member) return res.status(404).json({ error: 'Miembro no encontrado' });
+
+  // Primero intenta re-invitar (funciona si la cuenta nunca terminó de confirmarse,
+  // que es el caso más común: link vencido o que nunca llegó).
+  const { error: inviteError } = await supabase.auth.admin.inviteUserByEmail(member.email, {
+    redirectTo: PUBLIC_APP_URL,
+  });
+
+  if (!inviteError) return res.json({ sent: true, method: 'invite' });
+
+  // Si ya confirmó su cuenta antes, cae acá: le mandamos un correo real de recuperación.
+  const alreadyRegistered = /already.*registered/i.test(inviteError.message);
+  if (!alreadyRegistered) return res.status(400).json({ error: inviteError.message });
+
+  const { error: resetError } = await supabase.auth.resetPasswordForEmail(member.email, { redirectTo: PUBLIC_APP_URL });
+  if (resetError) return res.status(400).json({ error: resetError.message });
+
+  res.json({ sent: true, method: 'recovery' });
 });
 
 // Solo admin invita/crea miembros nuevos (el alta de auth se hace en Supabase Auth aparte)
