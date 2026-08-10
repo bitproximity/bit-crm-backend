@@ -82,15 +82,25 @@ router.post('/:id/resend-access', requireRole('admin'), async (req, res) => {
   const { data: member } = await supabase.from('team_members').select('email, auth_user_id').eq('id', req.params.id).single();
   if (!member) return res.status(404).json({ error: 'Miembro no encontrado' });
 
-  if (member.auth_user_id) {
-    await supabase.auth.admin.deleteUser(member.auth_user_id).catch(() => {});
+  // No confiamos solo en el auth_user_id guardado (puede estar desactualizado) —
+  // buscamos la cuenta real de Auth por correo antes de borrar.
+  const { data: userList, error: listError } = await supabase.auth.admin.listUsers();
+  if (listError) return res.status(400).json({ error: `No se pudo revisar las cuentas existentes: ${listError.message}` });
+
+  const existing = userList.users.find((u) => u.email?.toLowerCase() === member.email.toLowerCase());
+
+  if (existing) {
+    const { error: deleteError } = await supabase.auth.admin.deleteUser(existing.id);
+    if (deleteError) {
+      return res.status(400).json({ error: `No se pudo borrar la cuenta anterior para regenerar el acceso: ${deleteError.message}` });
+    }
   }
 
   const { data: authUser, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(member.email, {
     redirectTo: PUBLIC_APP_URL,
   });
 
-  if (inviteError) return res.status(400).json({ error: inviteError.message });
+  if (inviteError) return res.status(400).json({ error: `No se pudo crear la nueva invitación: ${inviteError.message}` });
 
   await supabase.from('team_members').update({ auth_user_id: authUser.user.id }).eq('id', req.params.id);
 
