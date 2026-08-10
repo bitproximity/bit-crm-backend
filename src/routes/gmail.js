@@ -4,6 +4,8 @@ const { google } = require('googleapis');
 const { getOAuthClient, GMAIL_SCOPES } = require('../config/googleOAuth');
 const { requireAuth } = require('../middleware/auth');
 
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
+
 const router = express.Router();
 
 // GET /api/gmail/connect — devuelve la URL de consentimiento de Google
@@ -43,10 +45,10 @@ router.get('/callback', async (req, res) => {
       { onConflict: 'team_member_id' }
     );
 
-    res.redirect(`${process.env.FRONTEND_ORIGIN}/settings?gmail=connected`);
+    res.redirect(`${PUBLIC_APP_URL}/profile?gmail=connected`);
   } catch (err) {
     console.error('Error en Gmail OAuth callback:', err);
-    res.redirect(`${process.env.FRONTEND_ORIGIN}/settings?gmail=error`);
+    res.redirect(`${PUBLIC_APP_URL}/profile?gmail=error`);
   }
 });
 
