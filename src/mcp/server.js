@@ -65,15 +65,16 @@ function buildServer(teamMember) {
         status: z.enum(['abierto', 'ganado', 'perdido']).optional().describe('Filtrar por estado del trato'),
         search: z.string().optional().describe('Texto a buscar en el título del trato'),
         limit: z.number().int().min(1).max(100).default(30).describe('Máximo de resultados'),
+        offset: z.number().int().min(0).default(0).describe('Desde qué posición empezar (para paginar más allá de 100 resultados)'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ pipeline_name, status, search, limit }) => {
+    async ({ pipeline_name, status, search, limit, offset }) => {
       let query = supabase
         .from('deals')
-        .select('id, title, value, currency, status, created_at, pipelines(name), pipeline_stages(name), companies(name), contacts(first_name,last_name)')
+        .select('id, title, value, currency, status, created_at, pipelines(name), pipeline_stages(name), companies(name), contacts(first_name,last_name)', { count: 'exact' })
         .order('created_at', { ascending: false })
-        .limit(limit);
+        .range(offset, offset + limit - 1);
       if (status) query = query.eq('status', status);
       if (search) query = query.ilike('title', `%${search}%`);
       if (pipeline_name) {
@@ -81,10 +82,13 @@ function buildServer(teamMember) {
         if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
         query = query.eq('pipeline_id', pipeline.id);
       }
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) return errorResult(error.message);
       return textResult({
         count: data.length,
+        total: count,
+        offset,
+        hasMore: offset + data.length < count,
         deals: data.map((d) => ({
           id: d.id, title: d.title, value: d.value, currency: d.currency, status: d.status,
           pipeline: d.pipelines?.name, stage: d.pipeline_stages?.name, company: d.companies?.name,
@@ -400,6 +404,121 @@ function buildServer(teamMember) {
       return textResult({
         pipelines: data.map((p) => ({ name: p.name, stages: p.pipeline_stages.sort((a, b) => a.position - b.position).map((s) => s.name) })),
       });
+    }
+  );
+
+  // ─── ETAPAS DE PIPELINE ───
+  server.registerTool(
+    'bitcrm_create_pipeline_stage',
+    {
+      title: 'Crear una etapa nueva en un embudo',
+      description: 'Agrega una etapa nueva a un embudo existente, en la posición indicada (o al final si se omite).',
+      inputSchema: {
+        pipeline_name: z.string().describe('Nombre exacto o parcial del embudo'),
+        stage_name: z.string().min(1).describe('Nombre de la etapa nueva'),
+        position: z.number().int().min(0).optional().describe('Posición (0 = primera). Si se omite, se agrega al final.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ pipeline_name, stage_name, position }) => {
+      const { data: pipeline } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name, position)').ilike('name', pipeline_name).maybeSingle();
+      if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
+      if (pipeline.pipeline_stages.some((s) => s.name.toLowerCase() === stage_name.toLowerCase())) {
+        return errorResult(`El embudo "${pipeline.name}" ya tiene una etapa llamada "${stage_name}".`);
+      }
+      const stages = [...pipeline.pipeline_stages].sort((a, b) => a.position - b.position);
+      const insertPos = position === undefined ? stages.length : Math.min(position, stages.length);
+
+      // Corre las posiciones de las etapas siguientes para abrir espacio
+      const toShift = stages.filter((s) => s.position >= insertPos);
+      for (const s of toShift) {
+        await supabase.from('pipeline_stages').update({ position: s.position + 1 }).eq('id', s.id);
+      }
+
+      const { data: created, error } = await supabase
+        .from('pipeline_stages')
+        .insert({ pipeline_id: pipeline.id, name: stage_name, position: insertPos })
+        .select()
+        .single();
+      if (error) return errorResult(error.message);
+      return textResult({ created: true, pipeline: pipeline.name, stage: created.name, position: created.position });
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_rename_pipeline_stage',
+    {
+      title: 'Renombrar una etapa de un embudo',
+      description: 'Cambia el nombre de una etapa existente dentro de un embudo, sin mover los tratos que están en ella.',
+      inputSchema: {
+        pipeline_name: z.string().describe('Nombre exacto o parcial del embudo'),
+        old_stage_name: z.string().describe('Nombre actual de la etapa'),
+        new_stage_name: z.string().min(1).describe('Nombre nuevo de la etapa'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ pipeline_name, old_stage_name, new_stage_name }) => {
+      const { data: pipeline } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name)').ilike('name', pipeline_name).maybeSingle();
+      if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
+      const stage = pipeline.pipeline_stages.find((s) => s.name.toLowerCase() === old_stage_name.toLowerCase());
+      if (!stage) return errorResult(`El embudo "${pipeline.name}" no tiene una etapa llamada "${old_stage_name}".`);
+      const { error } = await supabase.from('pipeline_stages').update({ name: new_stage_name }).eq('id', stage.id);
+      if (error) return errorResult(error.message);
+      return textResult({ updated: true, pipeline: pipeline.name, old_name: old_stage_name, new_name: new_stage_name });
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_delete_pipeline_stage',
+    {
+      title: 'Borrar una etapa de un embudo',
+      description: 'Borra una etapa de un embudo. Si tiene tratos, hay que indicar move_deals_to_stage_name para reubicarlos primero — nunca se borran tratos ni se dejan huérfanos.',
+      inputSchema: {
+        pipeline_name: z.string().describe('Nombre exacto o parcial del embudo'),
+        stage_name: z.string().describe('Nombre de la etapa a borrar'),
+        move_deals_to_stage_name: z.string().optional().describe('Etapa del mismo embudo a la que se mueven los tratos existentes antes de borrar'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ pipeline_name, stage_name, move_deals_to_stage_name }) => {
+      const { data: pipeline } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name)').ilike('name', pipeline_name).maybeSingle();
+      if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
+      const stage = pipeline.pipeline_stages.find((s) => s.name.toLowerCase() === stage_name.toLowerCase());
+      if (!stage) return errorResult(`El embudo "${pipeline.name}" no tiene una etapa llamada "${stage_name}".`);
+
+      const { count: dealsInStage } = await supabase.from('deals').select('*', { count: 'exact', head: true }).eq('stage_id', stage.id);
+
+      if (dealsInStage > 0) {
+        if (!move_deals_to_stage_name) {
+          return errorResult(`La etapa "${stage_name}" tiene ${dealsInStage} trato(s). Indica move_deals_to_stage_name para reubicarlos antes de borrar.`);
+        }
+        const targetStage = pipeline.pipeline_stages.find((s) => s.name.toLowerCase() === move_deals_to_stage_name.toLowerCase());
+        if (!targetStage) return errorResult(`El embudo "${pipeline.name}" no tiene una etapa llamada "${move_deals_to_stage_name}".`);
+        const { error: moveError } = await supabase.from('deals').update({ stage_id: targetStage.id }).eq('stage_id', stage.id);
+        if (moveError) return errorResult(moveError.message);
+      }
+
+      const { error } = await supabase.from('pipeline_stages').delete().eq('id', stage.id);
+      if (error) return errorResult(error.message);
+      return textResult({ deleted: true, pipeline: pipeline.name, stage: stage_name, deals_moved: dealsInStage > 0 ? dealsInStage : 0, moved_to: dealsInStage > 0 ? move_deals_to_stage_name : null });
+    }
+  );
+
+  // ─── BORRADO ───
+  server.registerTool(
+    'bitcrm_delete_deal',
+    {
+      title: 'Borrar un trato',
+      description: 'Borra permanentemente un trato de Bit CRM por su ID. Acción irreversible.',
+      inputSchema: { deal_id: z.string().uuid().describe('ID del trato a borrar') },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ deal_id }) => {
+      const { data: deal } = await supabase.from('deals').select('id, title').eq('id', deal_id).maybeSingle();
+      if (!deal) return errorResult('Trato no encontrado.');
+      const { error } = await supabase.from('deals').delete().eq('id', deal_id);
+      if (error) return errorResult(error.message);
+      return textResult({ deleted: true, deal_id, title: deal.title });
     }
   );
 
