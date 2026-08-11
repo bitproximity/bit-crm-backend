@@ -7,6 +7,13 @@ function computeB2bDashboard(records) {
   const byIndustry = {};
   const byCountry = {};
   const byMonth = {};
+  const byPerson = {};
+
+  records.forEach((r) => {
+    const personKey = r.created_by || 'sin_asignar';
+    if (!byPerson[personKey]) byPerson[personKey] = { contacted: 0, meetings: 0, name: r.team_members?.full_name || 'Sin asignar' };
+    byPerson[personKey].contacted += 1;
+  });
 
   meetings.forEach((r) => {
     const industry = r.industry || 'Sin especificar';
@@ -17,6 +24,8 @@ function computeB2bDashboard(records) {
       const month = r.meeting_date.slice(0, 7);
       byMonth[month] = (byMonth[month] || 0) + 1;
     }
+    const personKey = r.created_by || 'sin_asignar';
+    if (byPerson[personKey]) byPerson[personKey].meetings += 1;
   });
 
   const thisMonthKey = new Date().toISOString().slice(0, 7);
@@ -29,6 +38,9 @@ function computeB2bDashboard(records) {
     by_industry: Object.entries(byIndustry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_country: Object.entries(byCountry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_month: Object.entries(byMonth).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
+    by_person: Object.values(byPerson)
+      .map((p) => ({ ...p, conversion: p.contacted ? Math.round((p.meetings / p.contacted) * 100) : 0 }))
+      .sort((a, b) => b.meetings - a.meetings),
   };
 }
 

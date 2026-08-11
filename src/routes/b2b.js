@@ -142,7 +142,7 @@ router.get('/dashboard', async (req, res) => {
   const { client_company_id } = req.query;
   if (!client_company_id) return res.status(400).json({ error: 'Falta client_company_id' });
 
-  const { data: records, error } = await supabase.from('b2b_records').select('*').eq('client_company_id', client_company_id);
+  const { data: records, error } = await supabase.from('b2b_records').select('*, team_members(full_name)').eq('client_company_id', client_company_id);
   if (error) return res.status(500).json({ error: error.message });
   res.json(computeB2bDashboard(records));
 });
