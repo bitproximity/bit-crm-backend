@@ -1,8 +1,25 @@
 const express = require('express');
+const cors = require('cors');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 
 const router = express.Router();
+
+// Estos endpoints los llama Claude.ai directo desde el navegador al conectar
+// el conector — necesitan CORS abierto, SOLO en estas rutas (no en el resto de
+// la API, que sigue restringida a crm.bitproximity.com vía el CORS global).
+router.use((req, res, next) => {
+  if (req.path.startsWith('/oauth') || req.path.startsWith('/.well-known')) {
+    return cors({ origin: '*' })(req, res, next);
+  }
+  next();
+});
+router.use((req, res, next) => {
+  if (req.path.startsWith('/oauth') || req.path.startsWith('/.well-known')) {
+    return express.json()(req, res, () => express.urlencoded({ extended: true })(req, res, next));
+  }
+  next();
+});
 
 // El servidor MCP de Bit CRM se autentica con una API key propia (bitcrm_mcp_...),
 // no con usuario/contraseña. Claude.ai (vía Settings > Connectors) solo sabe hablar
@@ -47,7 +64,7 @@ router.get('/.well-known/oauth-protected-resource', (req, res) => {
 });
 
 // ── Registro dinámico de cliente: Claude.ai se auto-registra, no hace falta panel ──
-router.post('/oauth/register', express.json(), (req, res) => {
+router.post('/oauth/register', (req, res) => {
   res.status(201).json({
     client_id: 'bitcrm-mcp-client',
     client_id_issued_at: Math.floor(Date.now() / 1000),
@@ -96,7 +113,7 @@ router.get('/oauth/authorize', (req, res) => {
 </html>`);
 });
 
-router.post('/oauth/authorize', express.urlencoded({ extended: true }), async (req, res) => {
+router.post('/oauth/authorize', async (req, res) => {
   const { api_key, redirect_uri, state, code_challenge } = req.body;
 
   if (!api_key || !api_key.startsWith('bitcrm_mcp_')) {
@@ -125,7 +142,7 @@ router.post('/oauth/authorize', express.urlencoded({ extended: true }), async (r
 });
 
 // ── Intercambio de código por token: el "access_token" es la misma API key ──
-router.post('/oauth/token', express.urlencoded({ extended: true }), express.json(), (req, res) => {
+router.post('/oauth/token', (req, res) => {
   const body = { ...req.query, ...req.body };
   const { grant_type, code, code_verifier, refresh_token } = body;
 
