@@ -4,6 +4,11 @@ const cors = require('cors');
 
 const app = express();
 
+// Railway hace terminación TLS en su borde y le manda al proceso tráfico
+// plano por dentro — sin esto, req.protocol siempre da 'http' aunque el
+// sitio público sea https, y rompe las URLs que arma el stub de OAuth.
+app.set('trust proxy', true);
+
 // El servidor MCP y sus endpoints de OAuth deben responder a cualquier origen
 // (Claude.ai los consulta directo desde el navegador al conectar el conector) —
 // van montados ANTES del CORS restringido a crm.bitproximity.com de abajo, para
