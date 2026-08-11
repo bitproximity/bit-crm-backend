@@ -146,7 +146,7 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
     res.json(saved);
   } catch (err) {
     console.error('Error sincronizando Gmail:', err);
-    res.status(500).json({ error: 'Error consultando Gmail' });
+    res.status(500).json({ error: `Error consultando Gmail: ${err.message}` });
   }
 });
 
@@ -215,7 +215,7 @@ router.get('/contacts', async (req, res) => {
     res.json(contacts);
   } catch (err) {
     console.error('Error consultando Google Contacts:', err);
-    res.status(500).json({ error: 'Error consultando tus contactos de Google. Verifica que la People API esté habilitada en Google Cloud Console.' });
+    res.status(500).json({ error: `Error consultando tus contactos de Google: ${err.message}` });
   }
 });
 
@@ -262,7 +262,7 @@ router.get('/calendar/events', async (req, res) => {
     res.json(events);
   } catch (err) {
     console.error('Error consultando Google Calendar:', err);
-    res.status(500).json({ error: 'Error consultando el calendario' });
+    res.status(500).json({ error: `Error consultando el calendario: ${err.message}` });
   }
 });
 
