@@ -55,7 +55,7 @@ router.get('/.well-known/oauth-authorization-server', (req, res) => {
   });
 });
 
-router.get('/.well-known/oauth-protected-resource', (req, res) => {
+router.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], (req, res) => {
   const issuer = baseUrl(req);
   res.json({
     resource: `${issuer}/mcp`,
