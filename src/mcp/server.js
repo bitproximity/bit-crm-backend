@@ -399,11 +399,34 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async () => {
-      const { data, error } = await supabase.from('pipelines').select('name, pipeline_stages(name, position)').order('name');
+      const { data, error } = await supabase.from('pipelines').select('name, position, pipeline_stages(name, position)').order('position', { nullsFirst: false }).order('name');
       if (error) return errorResult(error.message);
       return textResult({
         pipelines: data.map((p) => ({ name: p.name, stages: p.pipeline_stages.sort((a, b) => a.position - b.position).map((s) => s.name) })),
       });
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_reorder_pipelines',
+    {
+      title: 'Reordenar la lista de embudos',
+      description: 'Define el orden en que aparecen los embudos (pipelines) en el selector del CRM.',
+      inputSchema: {
+        ordered_pipeline_names: z.array(z.string()).min(1).describe('Nombres de los embudos en el orden deseado, de primero a último'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ ordered_pipeline_names }) => {
+      const results = [];
+      for (let i = 0; i < ordered_pipeline_names.length; i++) {
+        const name = ordered_pipeline_names[i];
+        const { data, error } = await supabase.from('pipelines').update({ position: i }).ilike('name', name).select('name').maybeSingle();
+        if (error) return errorResult(`Falló en "${name}": ${error.message}`);
+        if (!data) return errorResult(`No encontré un embudo llamado "${name}". Nada se guardó después de este punto — revisa el nombre y reintenta.`);
+        results.push({ name: data.name, position: i });
+      }
+      return textResult({ reordered: true, order: results });
     }
   );
 

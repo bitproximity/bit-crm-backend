@@ -10,6 +10,7 @@ router.get('/', async (req, res) => {
   const { data: pipelines, error } = await supabase
     .from('pipelines')
     .select('*, pipeline_stages(*)')
+    .order('position', { nullsFirst: false })
     .order('created_at');
 
   if (error) return res.status(500).json({ error: error.message });
