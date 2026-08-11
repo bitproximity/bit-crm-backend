@@ -4,6 +4,12 @@ const cors = require('cors');
 
 const app = express();
 
+// El servidor MCP y sus endpoints de OAuth deben responder a cualquier origen
+// (Claude.ai los consulta directo desde el navegador al conectar el conector) —
+// van montados ANTES del CORS restringido a crm.bitproximity.com de abajo, para
+// que ese CORS restrictivo no les bloquee las peticiones.
+app.use('/', require('./routes/oauth'));
+
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || '*')
   .split(',')
   .map((o) => o.trim());
@@ -45,9 +51,6 @@ app.use('/api/deal-files', require('./routes/dealFiles'));
 app.use('/api/document-files', require('./routes/documentFiles'));
 app.use('/api/b2b', require('./routes/b2b'));
 app.use('/api/public/b2b', require('./routes/publicB2b'));
-
-// ── OAuth stub: permite conectar el MCP desde Settings > Connectors de Claude.ai ──
-app.use('/', require('./routes/oauth'));
 
 // ── Servidor MCP: conecta Claude Desktop/API a Bit CRM ──
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
