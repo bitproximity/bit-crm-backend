@@ -522,6 +522,54 @@ function buildServer(teamMember) {
     }
   );
 
+  server.registerTool(
+    'bitcrm_bulk_delete_deals_except',
+    {
+      title: 'Borrar en lote todos los tratos de un embudo excepto los indicados',
+      description: 'Borra TODOS los tratos de un embudo, dejando únicamente los IDs indicados en keep_deal_ids. Con confirm=false (default) solo hace un conteo de vista previa, sin borrar nada. Requiere confirm=true para ejecutar el borrado real.',
+      inputSchema: {
+        pipeline_name: z.string().describe('Nombre exacto o parcial del embudo'),
+        keep_deal_ids: z.array(z.string().uuid()).describe('IDs de los tratos que NO se deben borrar'),
+        confirm: z.boolean().default(false).describe('Debe ser true para ejecutar el borrado real. false = solo vista previa (conteo, sin borrar).'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ pipeline_name, keep_deal_ids, confirm }) => {
+      const { data: pipeline } = await supabase.from('pipelines').select('id, name').ilike('name', pipeline_name).maybeSingle();
+      if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
+
+      const { data: toDelete, error: selError } = await supabase
+        .from('deals')
+        .select('id, title')
+        .eq('pipeline_id', pipeline.id)
+        .not('id', 'in', `(${keep_deal_ids.join(',')})`);
+      if (selError) return errorResult(selError.message);
+
+      if (!confirm) {
+        return textResult({
+          preview: true,
+          pipeline: pipeline.name,
+          would_delete_count: toDelete.length,
+          would_keep_count: keep_deal_ids.length,
+          sample_titles: toDelete.slice(0, 15).map((d) => d.title),
+          note: 'Nada fue borrado. Vuelve a llamar con confirm=true para ejecutar.',
+        });
+      }
+
+      const idsToDelete = toDelete.map((d) => d.id);
+      let deletedCount = 0;
+      const chunkSize = 200;
+      for (let i = 0; i < idsToDelete.length; i += chunkSize) {
+        const chunk = idsToDelete.slice(i, i + chunkSize);
+        const { error: delError, count } = await supabase.from('deals').delete({ count: 'exact' }).in('id', chunk);
+        if (delError) return errorResult(`Se borraron ${deletedCount} antes de fallar: ${delError.message}`);
+        deletedCount += count || chunk.length;
+      }
+
+      return textResult({ deleted: true, pipeline: pipeline.name, deleted_count: deletedCount, kept_count: keep_deal_ids.length });
+    }
+  );
+
   return server;
 }
 
