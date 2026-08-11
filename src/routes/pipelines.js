@@ -26,6 +26,28 @@ router.post('/', requireRole('admin'), async (req, res) => {
   res.status(201).json(data);
 });
 
+// PATCH /api/pipelines/reorder  { ordered_ids: [uuid, uuid, ...] } — define el orden del selector
+router.patch('/reorder', requireRole('admin'), async (req, res) => {
+  const { ordered_ids } = req.body;
+  if (!Array.isArray(ordered_ids) || ordered_ids.length === 0) {
+    return res.status(400).json({ error: 'ordered_ids debe ser un array de IDs.' });
+  }
+  for (let i = 0; i < ordered_ids.length; i++) {
+    const { error } = await supabase.from('pipelines').update({ position: i }).eq('id', ordered_ids[i]);
+    if (error) return res.status(400).json({ error: `Falló en el ID ${ordered_ids[i]}: ${error.message}` });
+  }
+  res.json({ reordered: true, count: ordered_ids.length });
+});
+
+// PATCH /api/pipelines/:id/visibility  { is_hidden: boolean }
+router.patch('/:id/visibility', requireRole('admin'), async (req, res) => {
+  const { is_hidden } = req.body;
+  if (typeof is_hidden !== 'boolean') return res.status(400).json({ error: 'is_hidden debe ser true o false.' });
+  const { data, error } = await supabase.from('pipelines').update({ is_hidden }).eq('id', req.params.id).select().single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
 // PATCH /api/pipelines/:id — renombrar pipeline
 router.patch('/:id', requireRole('admin'), async (req, res) => {
   const { data, error } = await supabase
