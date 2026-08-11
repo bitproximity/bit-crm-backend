@@ -46,6 +46,9 @@ app.use('/api/document-files', require('./routes/documentFiles'));
 app.use('/api/b2b', require('./routes/b2b'));
 app.use('/api/public/b2b', require('./routes/publicB2b'));
 
+// ── OAuth stub: permite conectar el MCP desde Settings > Connectors de Claude.ai ──
+app.use('/', require('./routes/oauth'));
+
 // ── Servidor MCP: conecta Claude Desktop/API a Bit CRM ──
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { buildServer } = require('./mcp/server');
