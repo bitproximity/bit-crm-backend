@@ -12,18 +12,33 @@ router.use(requirePage('deals'));
 router.get('/', async (req, res) => {
   const { pipeline_id, owner_id, status } = req.query;
 
-  let query = supabase
-    .from('deals')
-    .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position)')
-    .order('updated_at', { ascending: false });
+  // El cliente de Supabase limita cada request a 1000 filas por defecto.
+  // Si el pipeline tiene más deals que eso, hay que paginar con .range()
+  // hasta traerlos todos, o el frontend recibe un subconjunto silencioso.
+  const pageSize = 1000;
+  let from = 0;
+  let allDeals = [];
 
-  if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
-  if (owner_id) query = query.eq('owner_id', owner_id);
-  if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
+  while (true) {
+    let query = supabase
+      .from('deals')
+      .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position)')
+      .order('updated_at', { ascending: false })
+      .range(from, from + pageSize - 1);
 
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+    if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
+    if (owner_id) query = query.eq('owner_id', owner_id);
+    if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+
+    allDeals = allDeals.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  res.json(allDeals);
 });
 
 router.get('/:id', async (req, res) => {
