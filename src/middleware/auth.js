@@ -35,7 +35,18 @@ async function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
+    // El endpoint /mcp necesita indicar, en el header WWW-Authenticate, dónde
+    // está la metadata OAuth — sin esto el cliente de Claude.ai no puede
+    // descubrir el servidor de autorización y nunca llega a intentar conectar.
+    const addAuthHeader = () => {
+      if (req.path === '/mcp' || req.originalUrl === '/mcp') {
+        const issuer = `${req.protocol}://${req.get('host')}`;
+        res.set('WWW-Authenticate', `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource"`);
+      }
+    };
+
     if (!token) {
+      addAuthHeader();
       return res.status(401).json({ error: 'Falta token de autenticación' });
     }
 
@@ -58,6 +69,7 @@ async function requireAuth(req, res, next) {
         .maybeSingle();
 
       if (!apiKey || !apiKey.team_members?.active) {
+        addAuthHeader();
         return res.status(401).json({ error: 'API key inválida o revocada' });
       }
 
@@ -70,6 +82,7 @@ async function requireAuth(req, res, next) {
 
     const { data: userData, error: authError } = await supabase.auth.getUser(token);
     if (authError || !userData?.user) {
+      addAuthHeader();
       return res.status(401).json({ error: 'Token inválido o expirado' });
     }
 
