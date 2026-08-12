@@ -114,4 +114,61 @@ router.get('/meetings', async (req, res) => {
   });
 });
 
+// GET /api/metrics/products — ranking de productos por ingresos reales (tratos ganados),
+// desglosado por país e industria de la empresa compradora.
+router.get('/products', async (req, res) => {
+  const [{ data: items, error }, { data: rates }] = await Promise.all([
+    supabase
+      .from('deal_line_items')
+      .select('quantity, unit_price, currency, product_id, products(name), deals!inner(status, company_id, companies(country, industry))')
+      .eq('deals.status', 'ganado'),
+    supabase.from('exchange_rates').select('*'),
+  ]);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
+  const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
+
+  const products = {};
+
+  (items || []).forEach((it) => {
+    const key = it.product_id || `sin_producto:${it.products?.name || 'Producto sin nombre'}`;
+    const name = it.products?.name || 'Producto sin nombre';
+    const revenueUsd = toUsd(Number(it.quantity || 0) * Number(it.unit_price || 0), it.currency);
+    const country = it.deals?.companies?.country?.trim() || 'Sin especificar';
+    const industry = it.deals?.companies?.industry?.trim() || 'Sin especificar';
+
+    if (!products[key]) {
+      products[key] = { product_id: it.product_id, name, revenue_usd: 0, quantity: 0, by_country: {}, by_industry: {} };
+    }
+    const p = products[key];
+    p.revenue_usd += revenueUsd;
+    p.quantity += Number(it.quantity || 0);
+
+    p.by_country[country] = p.by_country[country] || { revenue_usd: 0, quantity: 0 };
+    p.by_country[country].revenue_usd += revenueUsd;
+    p.by_country[country].quantity += Number(it.quantity || 0);
+
+    p.by_industry[industry] = p.by_industry[industry] || { revenue_usd: 0, quantity: 0 };
+    p.by_industry[industry].revenue_usd += revenueUsd;
+    p.by_industry[industry].quantity += Number(it.quantity || 0);
+  });
+
+  const toSortedList = (obj) =>
+    Object.entries(obj).map(([name, v]) => ({ name, ...v, revenue_usd: Math.round(v.revenue_usd) })).sort((a, b) => b.revenue_usd - a.revenue_usd);
+
+  const result = Object.values(products)
+    .map((p) => ({
+      product_id: p.product_id,
+      name: p.name,
+      revenue_usd: Math.round(p.revenue_usd),
+      quantity: p.quantity,
+      by_country: toSortedList(p.by_country),
+      by_industry: toSortedList(p.by_industry),
+    }))
+    .sort((a, b) => b.revenue_usd - a.revenue_usd);
+
+  res.json({ products: result, top: result[0] || null });
+});
+
 module.exports = router;
