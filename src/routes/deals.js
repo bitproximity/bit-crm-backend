@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
   while (true) {
     let query = supabase
       .from('deals')
-      .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position)')
+      .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position), pipelines(name)')
       .order('updated_at', { ascending: false })
       .range(from, from + pageSize - 1);
 
@@ -166,6 +166,27 @@ router.post('/:id/lose', async (req, res) => {
 
   if (error) return res.status(400).json({ error: error.message });
   await logAudit('deal', id, 'status_changed', req.teamMember.id, { status: { to: 'perdido' } });
+  res.json(data);
+});
+
+// POST /api/deals/:id/reopen — vuelve un trato ganado o perdido a "abierto",
+// se queda en la misma etapa donde estaba, limpia closed_at y lost_reason.
+router.post('/:id/reopen', async (req, res) => {
+  const { id } = req.params;
+
+  const { data: current } = await supabase.from('deals').select('status').eq('id', id).maybeSingle();
+  if (!current) return res.status(404).json({ error: 'Trato no encontrado.' });
+  if (current.status === 'abierto') return res.status(400).json({ error: 'Este trato ya está abierto.' });
+
+  const { data, error } = await supabase
+    .from('deals')
+    .update({ status: 'abierto', closed_at: null, lost_reason: null })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  await logAudit('deal', id, 'status_changed', req.teamMember.id, { status: { from: current.status, to: 'abierto' } });
   res.json(data);
 });
 
