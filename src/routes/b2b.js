@@ -147,4 +147,35 @@ router.get('/dashboard', async (req, res) => {
   res.json(computeB2bDashboard(records));
 });
 
+// GET /api/b2b/leaderboard — rendimiento por persona cruzando TODOS los clientes,
+// para comparar el equipo de Outbound en conjunto (no cliente por cliente).
+router.get('/leaderboard', async (req, res) => {
+  const { data: records, error } = await supabase.from('b2b_records').select('*, team_members(full_name), companies(name)');
+  if (error) return res.status(500).json({ error: error.message });
+
+  const global = computeB2bDashboard(records);
+
+  // Además del total, desglosa cada persona por cliente para ver dónde está parada su carga.
+  const byPersonByClient = {};
+  records.forEach((r) => {
+    const personKey = r.created_by || 'sin_asignar';
+    const personName = r.team_members?.full_name || 'Sin asignar';
+    const clientName = r.companies?.name || 'Sin cliente';
+    if (!byPersonByClient[personKey]) byPersonByClient[personKey] = { name: personName, clients: {} };
+    if (!byPersonByClient[personKey].clients[clientName]) byPersonByClient[personKey].clients[clientName] = { contacted: 0, meetings: 0 };
+    byPersonByClient[personKey].clients[clientName].contacted += 1;
+    if (r.meeting_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada') {
+      byPersonByClient[personKey].clients[clientName].meetings += 1;
+    }
+  });
+
+  res.json({
+    ...global,
+    by_person_by_client: Object.values(byPersonByClient).map((p) => ({
+      name: p.name,
+      clients: Object.entries(p.clients).map(([client, stats]) => ({ client, ...stats })),
+    })),
+  });
+});
+
 module.exports = router;
