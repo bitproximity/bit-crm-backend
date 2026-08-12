@@ -8,9 +8,9 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePage('deals'));
 
-// GET /api/deals?pipeline_id=&owner_id=&status=
+// GET /api/deals?pipeline_id=&owner_id=&status=&stage_id=&lost_reason=&created_month=YYYY-MM&closed_month=YYYY-MM
 router.get('/', async (req, res) => {
-  const { pipeline_id, owner_id, status } = req.query;
+  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month } = req.query;
 
   // El cliente de Supabase limita cada request a 1000 filas por defecto.
   // Si el pipeline tiene más deals que eso, hay que paginar con .range()
@@ -29,6 +29,28 @@ router.get('/', async (req, res) => {
     if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
     if (owner_id) query = query.eq('owner_id', owner_id);
     if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
+    if (stage_id) query = query.eq('stage_id', stage_id);
+    if (lost_reason) {
+      query = lost_reason === '(sin motivo)'
+        ? query.or('lost_reason.is.null,lost_reason.eq.')
+        : query.eq('lost_reason', lost_reason);
+    }
+    if (created_month) {
+      const [y, m] = created_month.split('-').map(Number);
+      const start = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+      const end = new Date(Date.UTC(y, m, 1)).toISOString();
+      query = query.gte('created_at', start).lt('created_at', end);
+    }
+    if (closed_month) {
+      const [y, m] = closed_month.split('-').map(Number);
+      const start = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+      const end = new Date(Date.UTC(y, m, 1)).toISOString();
+      query = query.gte('closed_at', start).lt('closed_at', end);
+    }
+    if (req.query.closed_year) {
+      const y = Number(req.query.closed_year);
+      query = query.gte('closed_at', `${y}-01-01T00:00:00.000Z`).lt('closed_at', `${y + 1}-01-01T00:00:00.000Z`);
+    }
 
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
