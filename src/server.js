@@ -34,6 +34,7 @@ app.use('/api/contacts', require('./routes/contacts'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/pipelines', require('./routes/pipelines'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/enrichment', require('./routes/enrichment'));
 app.use('/api/deals', require('./routes/deals'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
