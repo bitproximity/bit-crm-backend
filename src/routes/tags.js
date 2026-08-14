@@ -57,4 +57,35 @@ router.get('/for/:entity_type/:entity_id', async (req, res) => {
   res.json(data.map((row) => row.tags));
 });
 
+// GET /api/tags/:tagId/contacts — todos los contactos con este tag (para ver una "lista" completa)
+router.get('/:tagId/contacts', async (req, res) => {
+  const { tagId } = req.params;
+  const { data, error } = await supabase
+    .from('taggables')
+    .select('contacts(*, companies(name))')
+    .eq('tag_id', tagId)
+    .eq('entity_type', 'contact');
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data.map((row) => row.contacts).filter(Boolean));
+});
+
+// GET /api/tags/with-contact-counts — todos los tags con cuántos contactos tiene cada uno (para la vista de Listas)
+router.get('/with-contact-counts', async (req, res) => {
+  const { data, error } = await supabase
+    .from('taggables')
+    .select('tag_id, tags(id, name, color)')
+    .eq('entity_type', 'contact');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const counts = {};
+  data.forEach((row) => {
+    if (!row.tags) return;
+    if (!counts[row.tag_id]) counts[row.tag_id] = { ...row.tags, contact_count: 0 };
+    counts[row.tag_id].contact_count += 1;
+  });
+  res.json(Object.values(counts).sort((a, b) => b.contact_count - a.contact_count));
+});
+
 module.exports = router;

@@ -85,14 +85,27 @@ router.post('/search', async (req, res) => {
   res.status(400).json({ error: `Proveedor desconocido: ${provider}` });
 });
 
-// POST /api/prospecting/import  { candidates: [...] }  (misma forma que devuelve /search)
+// POST /api/prospecting/import  { candidates: [...], listName? }  (misma forma que devuelve /search)
 // Crea Empresa (si no existe, por nombre) + Contacto para cada candidato seleccionado.
+// Si se manda listName, además crea/reusa un tag con ese nombre y etiqueta a cada contacto importado —
+// así queda armada la "lista" (ej. "Apollo", "Lusha", o cualquier nombre custom) para filtrar después.
 // No revela email/telefono aquí — para eso usa los botones "Lusha"/"Apollo" ya existentes
 // en el detalle del contacto recién creado (evita gastar créditos en gente que luego no sirve).
 router.post('/import', async (req, res) => {
-  const { candidates } = req.body;
+  const { candidates, listName } = req.body;
   if (!Array.isArray(candidates) || candidates.length === 0) {
     return res.status(400).json({ error: 'candidates debe ser un array no vacío.' });
+  }
+
+  let tagId = null;
+  if (listName && listName.trim()) {
+    const { data: existingTag } = await supabase.from('tags').select('id').ilike('name', listName.trim()).maybeSingle();
+    if (existingTag) {
+      tagId = existingTag.id;
+    } else {
+      const { data: newTag, error: tagError } = await supabase.from('tags').insert({ name: listName.trim() }).select('id').single();
+      if (!tagError) tagId = newTag.id;
+    }
   }
 
   const created = [];
@@ -139,12 +152,13 @@ router.post('/import', async (req, res) => {
       .single();
 
     if (contactError) { skipped.push({ candidate: c, reason: contactError.message }); continue; }
+    if (tagId) await supabase.from('taggables').insert({ tag_id: tagId, entity_type: 'contact', entity_id: contact.id });
     created.push(contact);
   }
 
   if (created.length) await logAudit('contact', created[0].id, 'created', req.teamMember.id, { bulk_import: created.length, source: 'prospecting' });
 
-  res.json({ imported: created.length, skipped: skipped.length, contacts: created, skipped_details: skipped });
+  res.json({ imported: created.length, skipped: skipped.length, contacts: created, skipped_details: skipped, list_name: listName?.trim() || null });
 });
 
 module.exports = router;
