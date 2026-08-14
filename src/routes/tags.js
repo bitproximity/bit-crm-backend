@@ -17,6 +17,21 @@ router.post('/', async (req, res) => {
   res.status(201).json(data);
 });
 
+// PATCH /api/tags/:tagId  { name?, color? }
+router.patch('/:tagId', async (req, res) => {
+  const { data, error } = await supabase.from('tags').update(req.body).eq('id', req.params.tagId).select().single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
+// DELETE /api/tags/:tagId — borra el tag y todos sus vínculos (deals y contactos etiquetados quedan intactos, solo pierden la etiqueta)
+router.delete('/:tagId', async (req, res) => {
+  await supabase.from('taggables').delete().eq('tag_id', req.params.tagId);
+  const { error } = await supabase.from('tags').delete().eq('id', req.params.tagId);
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(204).send();
+});
+
 // POST /api/tags/:tagId/attach  { entity_type, entity_id }
 router.post('/:tagId/attach', async (req, res) => {
   const { tagId } = req.params;
@@ -60,14 +75,17 @@ router.get('/for/:entity_type/:entity_id', async (req, res) => {
 // GET /api/tags/:tagId/contacts — todos los contactos con este tag (para ver una "lista" completa)
 router.get('/:tagId/contacts', async (req, res) => {
   const { tagId } = req.params;
-  const { data, error } = await supabase
-    .from('taggables')
-    .select('contacts(*, companies(name))')
-    .eq('tag_id', tagId)
-    .eq('entity_type', 'contact');
+  // taggables.entity_id es polimórfico (puede apuntar a deals o contacts), así que Supabase/PostgREST
+  // no tiene una relación declarada para hacer el embed automático — hay que resolverlo en dos pasos.
+  const { data: links, error: linksError } = await supabase
+    .from('taggables').select('entity_id').eq('tag_id', tagId).eq('entity_type', 'contact');
+  if (linksError) return res.status(500).json({ error: linksError.message });
+  if (links.length === 0) return res.json([]);
 
+  const { data: contacts, error } = await supabase
+    .from('contacts').select('*, companies(name)').in('id', links.map((l) => l.entity_id));
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data.map((row) => row.contacts).filter(Boolean));
+  res.json(contacts);
 });
 
 // GET /api/tags/with-contact-counts — todos los tags con cuántos contactos tiene cada uno (para la vista de Listas)
