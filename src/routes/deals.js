@@ -94,7 +94,10 @@ router.delete('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { data, error } = await supabase.from('deals').insert(req.body).select().single();
+  // El propietario siempre es quien está creando el trato, salvo que se mande owner_id explícito
+  // (ej. un admin creándolo a nombre de otra persona desde una importación).
+  const payload = { owner_id: req.teamMember.id, ...req.body };
+  const { data, error } = await supabase.from('deals').insert(payload).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
   await logAudit('deal', data.id, 'created', req.teamMember.id);
