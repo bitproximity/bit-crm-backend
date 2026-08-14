@@ -72,20 +72,21 @@ router.get('/:tagId/contacts', async (req, res) => {
 
 // GET /api/tags/with-contact-counts — todos los tags con cuántos contactos tiene cada uno (para la vista de Listas)
 router.get('/with-contact-counts', async (req, res) => {
-  const { data, error } = await supabase
-    .from('taggables')
-    .select('tag_id, tags(id, name, color)')
-    .eq('entity_type', 'contact');
-
-  if (error) return res.status(500).json({ error: error.message });
+  const [{ data: allTags, error: tagsError }, { data: links, error: linksError }] = await Promise.all([
+    supabase.from('tags').select('id, name, color').order('name'),
+    supabase.from('taggables').select('tag_id').eq('entity_type', 'contact'),
+  ]);
+  if (tagsError) return res.status(500).json({ error: tagsError.message });
+  if (linksError) return res.status(500).json({ error: linksError.message });
 
   const counts = {};
-  data.forEach((row) => {
-    if (!row.tags) return;
-    if (!counts[row.tag_id]) counts[row.tag_id] = { ...row.tags, contact_count: 0 };
-    counts[row.tag_id].contact_count += 1;
-  });
-  res.json(Object.values(counts).sort((a, b) => b.contact_count - a.contact_count));
+  links.forEach((row) => { counts[row.tag_id] = (counts[row.tag_id] || 0) + 1; });
+
+  const result = allTags
+    .map((t) => ({ ...t, contact_count: counts[t.id] || 0 }))
+    .sort((a, b) => b.contact_count - a.contact_count);
+
+  res.json(result);
 });
 
 module.exports = router;
