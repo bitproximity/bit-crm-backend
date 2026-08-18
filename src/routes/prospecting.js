@@ -122,4 +122,57 @@ router.get('/pipeline-snapshot', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 5) Opcional — historial de "ya contactado" (evita que el equipo duplique outreach)
+// ---------------------------------------------------------------------------
+// Reemplaza el window.storage de Claude.ai por tu propia base — funciona sin
+// importar dónde esté hospedado el HTML. Usa Supabase (ya lo tienes importado
+// en middleware/auth.js con el mismo patrón).
+//
+// Antes de usar esto, crea la tabla en Supabase (SQL Editor):
+//
+//   create table prospecting_contacted (
+//     key text primary key,
+//     company text not null,
+//     channel text,
+//     step int,
+//     contacted_at timestamptz not null default now()
+//   );
+//
+// Y en el HTML, configura:
+//   const CONTACTED_API_URL = 'https://bit-crm-backend-production.up.railway.app/api/prospecting/contacted';
+const supabase = require('../config/supabase');
+
+router.get('/contacted', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('prospecting_contacted').select('*');
+    if (error) throw error;
+    const contacted = {};
+    (data || []).forEach(row => {
+      contacted[row.key] = { company: row.company, channel: row.channel, step: row.step, at: row.contacted_at };
+    });
+    res.json({ contacted });
+  } catch (err) {
+    console.error('Error leyendo historial de contacto:', err);
+    res.status(500).json({ error: 'Error interno leyendo el historial de contacto.' });
+  }
+});
+
+router.post('/contacted', async (req, res) => {
+  try {
+    const { key, company, channel, step, at } = req.body;
+    if (!key || !company) {
+      return res.status(400).json({ error: 'Faltan "key" o "company" en el body.' });
+    }
+    const { error } = await supabase.from('prospecting_contacted').upsert({
+      key, company, channel, step, contacted_at: at || new Date().toISOString()
+    });
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error guardando historial de contacto:', err);
+    res.status(500).json({ error: 'Error interno guardando el historial de contacto.' });
+  }
+});
+
 module.exports = router;
