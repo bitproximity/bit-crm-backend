@@ -39,12 +39,34 @@ router.post('/search', async (req, res) => {
       return res.status(400).json({ error: 'Falta el campo "prompt" en el body.' });
     }
 
+    // El navegador manda solo la URL/nombre de cada servidor MCP — el token
+    // de autorización de cada servicio (Lusha, Apollo) se agrega acá, del
+    // lado del servidor, para no exponerlo nunca al cliente. Sin esto,
+    // Anthropic no puede autenticarse contra Lusha/Apollo y responde 400
+    // "Authentication error while communicating with MCP server".
+    //
+    // Variables de entorno necesarias en Railway:
+    //   LUSHA_API_KEY=...   (Lusha → Settings → API → API Keys)
+    //   APOLLO_API_KEY=...  (Apollo → Settings → Integrations → API)
+    let finalMcpServers = mcp_servers;
+    if (mcp_servers) {
+      finalMcpServers = mcp_servers.map((server) => {
+        if (server.name === 'lusha' && process.env.LUSHA_API_KEY) {
+          return { ...server, authorization_token: process.env.LUSHA_API_KEY };
+        }
+        if (server.name === 'apollo' && process.env.APOLLO_API_KEY) {
+          return { ...server, authorization_token: process.env.APOLLO_API_KEY };
+        }
+        return server;
+      });
+    }
+
     const body = {
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4000,
       messages: [{ role: 'user', content: prompt }]
     };
-    if (mcp_servers) body.mcp_servers = mcp_servers;
+    if (finalMcpServers) body.mcp_servers = finalMcpServers;
     if (tools) body.tools = tools;
 
     const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
