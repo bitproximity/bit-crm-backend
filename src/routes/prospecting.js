@@ -42,23 +42,30 @@ router.post('/search', async (req, res) => {
     // El navegador manda solo la URL/nombre de cada servidor MCP — el token
     // de autorización de cada servicio (Lusha, Apollo) se agrega acá, del
     // lado del servidor, para no exponerlo nunca al cliente. Sin esto,
-    // Anthropic no puede autenticarse contra Lusha/Apollo y responde 400
+    // Anthropic no puede autenticarse contra ese servidor y responde 400
     // "Authentication error while communicating with MCP server".
+    //
+    // Si a un servidor le falta la key, se EXCLUYE en vez de mandarlo sin
+    // token — así una búsqueda no falla completa solo porque falte una de
+    // las dos (ej. tienes Lusha configurado pero Apollo todavía no).
     //
     // Variables de entorno necesarias en Railway:
     //   LUSHA_API_KEY=...   (Lusha → Settings → API → API Keys)
     //   APOLLO_API_KEY=...  (Apollo → Settings → Integrations → API)
     let finalMcpServers = mcp_servers;
     if (mcp_servers) {
-      finalMcpServers = mcp_servers.map((server) => {
-        if (server.name === 'lusha' && process.env.LUSHA_API_KEY) {
-          return { ...server, authorization_token: process.env.LUSHA_API_KEY };
-        }
-        if (server.name === 'apollo' && process.env.APOLLO_API_KEY) {
-          return { ...server, authorization_token: process.env.APOLLO_API_KEY };
-        }
-        return server;
-      });
+      finalMcpServers = mcp_servers
+        .map((server) => {
+          if (server.name === 'lusha' && process.env.LUSHA_API_KEY) {
+            return { ...server, authorization_token: process.env.LUSHA_API_KEY };
+          }
+          if (server.name === 'apollo' && process.env.APOLLO_API_KEY) {
+            return { ...server, authorization_token: process.env.APOLLO_API_KEY };
+          }
+          console.warn(`Sin API key configurada para "${server.name}" — se excluye de esta búsqueda.`);
+          return null;
+        })
+        .filter(Boolean);
     }
 
     const body = {
