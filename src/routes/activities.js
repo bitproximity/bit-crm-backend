@@ -1,7 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
-const { syncActivityToCalendar } = require('../utils/googleCalendarSync');
+const { syncActivityToCalendar, getCalendarClientForUser } = require('../utils/googleCalendarSync');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -169,6 +169,21 @@ router.post('/import', async (req, res) => {
   }
 
   res.json(results);
+});
+
+// DELETE /api/activities/:id
+router.delete('/:id', async (req, res) => {
+  const { data: activity } = await supabase.from('activities').select('*').eq('id', req.params.id).maybeSingle();
+  if (!activity) return res.status(404).json({ error: 'Actividad no encontrada.' });
+
+  if (activity.google_event_id && activity.author_id) {
+    const conn = await getCalendarClientForUser(activity.author_id);
+    if (conn) await conn.calendar.events.delete({ calendarId: 'primary', eventId: activity.google_event_id }).catch(() => {});
+  }
+
+  const { error } = await supabase.from('activities').delete().eq('id', req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(204).send();
 });
 
 module.exports = router;

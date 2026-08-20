@@ -155,4 +155,4 @@ async function syncActivityToCalendar(activity) {
   }
 }
 
-module.exports = { syncTaskToCalendar, deleteTaskFromCalendar, syncActivityToCalendar };
+module.exports = { syncTaskToCalendar, deleteTaskFromCalendar, syncActivityToCalendar, getCalendarClientForUser };
