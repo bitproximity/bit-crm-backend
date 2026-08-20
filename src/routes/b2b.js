@@ -208,4 +208,77 @@ router.get('/leaderboard', async (req, res) => {
   });
 });
 
+// POST /api/b2b/clients/:id/export-to-contacts — convierte los registros de un cliente de Bit Prospect
+// en Contactos + Empresas reales del CRM, agrupados en una Lista (tag) "Bit Prospect <cliente>"
+// para que aparezcan junto a las listas de Apollo/Lusha en el módulo de Listas.
+router.post('/clients/:id/export-to-contacts', async (req, res) => {
+  const { data: client } = await supabase.from('companies').select('name').eq('id', req.params.id).maybeSingle();
+  if (!client) return res.status(404).json({ error: 'Cliente no encontrado.' });
+
+  const { data: records, error: recordsError } = await supabase
+    .from('b2b_records').select('*').eq('client_company_id', req.params.id);
+  if (recordsError) return res.status(500).json({ error: recordsError.message });
+
+  const listName = `Bit Prospect ${client.name}`;
+  const { data: existingTag } = await supabase.from('tags').select('id').ilike('name', listName).maybeSingle();
+  let tagId = existingTag?.id;
+  if (!tagId) {
+    const { data: newTag, error: tagError } = await supabase.from('tags').insert({ name: listName }).select('id').single();
+    if (tagError) return res.status(400).json({ error: tagError.message });
+    tagId = newTag.id;
+  }
+
+  let created = 0;
+  let skipped = 0;
+
+  for (const r of records) {
+    if (!r.target_company) { skipped++; continue; }
+
+    let companyId;
+    const { data: existingCompany } = await supabase.from('companies').select('id').ilike('name', r.target_company).maybeSingle();
+    if (existingCompany) {
+      companyId = existingCompany.id;
+    } else {
+      const { data: newCompany, error: companyError } = await supabase
+        .from('companies').insert({ name: r.target_company, country: r.country || null, industry: r.industry || null }).select('id').single();
+      if (companyError) { skipped++; continue; }
+      companyId = newCompany.id;
+    }
+
+    const [firstName, ...rest] = (r.target_contact || r.target_company).trim().split(' ');
+    const { data: dupe } = await supabase
+      .from('contacts').select('id').eq('company_id', companyId).ilike('first_name', firstName).maybeSingle();
+
+    let contactId = dupe?.id;
+    if (!contactId) {
+      const { data: contact, error: contactError } = await supabase
+        .from('contacts')
+        .insert({
+          first_name: firstName || r.target_company,
+          last_name: rest.join(' ') || null,
+          position: r.target_position || null,
+          email: r.target_email || null,
+          phone: r.target_phone || null,
+          country: r.country || null,
+          company_id: companyId,
+          owner_id: req.teamMember.id,
+          source: 'bit_prospect',
+        })
+        .select('id')
+        .single();
+      if (contactError) { skipped++; continue; }
+      contactId = contact.id;
+    }
+
+    const { data: alreadyTagged } = await supabase
+      .from('taggables').select('tag_id').eq('tag_id', tagId).eq('entity_type', 'contact').eq('entity_id', contactId).maybeSingle();
+    if (!alreadyTagged) {
+      await supabase.from('taggables').insert({ tag_id: tagId, entity_type: 'contact', entity_id: contactId });
+    }
+    created++;
+  }
+
+  res.json({ created, skipped, list_name: listName });
+});
+
 module.exports = router;
