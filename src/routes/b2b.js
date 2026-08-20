@@ -13,11 +13,25 @@ router.use(requirePage('b2b'));
 router.get('/clients', async (req, res) => {
   const { data, error } = await supabase
     .from('companies')
-    .select('id, name, b2b_share_token')
+    .select('id, name, b2b_share_token, b2b_order')
     .eq('is_b2b_client', true)
+    .order('b2b_order', { ascending: true, nullsFirst: false })
     .order('name');
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// PATCH /api/b2b/clients/reorder  { ordered_ids: [uuid, ...] } — define el orden del selector de marcas
+router.patch('/clients/reorder', async (req, res) => {
+  const { ordered_ids } = req.body;
+  if (!Array.isArray(ordered_ids) || ordered_ids.length === 0) {
+    return res.status(400).json({ error: 'ordered_ids debe ser un array de IDs.' });
+  }
+  for (let i = 0; i < ordered_ids.length; i++) {
+    const { error } = await supabase.from('companies').update({ b2b_order: i }).eq('id', ordered_ids[i]);
+    if (error) return res.status(400).json({ error: `Falló en el ID ${ordered_ids[i]}: ${error.message}` });
+  }
+  res.json({ reordered: true, count: ordered_ids.length });
 });
 
 // POST /api/b2b/clients  { company_id }  — marca una empresa existente como cliente del servicio
