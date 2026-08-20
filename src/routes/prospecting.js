@@ -1,164 +1,207 @@
+// src/routes/prospecting.js
+//
+// Se monta en server.js como:
+//   app.use('/api/prospecting', require('./routes/prospecting'));
+// Por eso las rutas de abajo son '/search', '/save-to-crm', '/pipeline-snapshot'
+// (SIN repetir '/api/prospecting' — ese prefijo ya lo pone el app.use).
+//
+// El CORS lo maneja el middleware global de server.js (FRONTEND_ORIGIN) —
+// a propósito NO se repite acá para no duplicar/pisar esos headers.
+
 const express = require('express');
-const supabase = require('../config/supabase');
-const { requireAuth } = require('../middleware/auth');
-const { requirePage } = require('../middleware/pagePermissions');
-const { logAudit } = require('../utils/audit');
+const fetch = require('node-fetch'); // si usas Node 18+, puedes usar el fetch global y borrar esta línea
 
 const router = express.Router();
-router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
 
-// POST /api/prospecting/search
-// body: { provider: 'lusha' | 'apollo', title, department, country, page }
-// Devuelve una VISTA PREVIA (nombre, cargo, empresa, país) — sin email/teléfono.
-// Lusha cobra créditos por cada resultado de búsqueda aunque sea preview; Apollo no.
+// ---------------------------------------------------------------------------
+// 1) Instalación
+// ---------------------------------------------------------------------------
+// En bit-crm-backend:
+//   npm install node-fetch@2   (si no lo tienes ya; "express" ya lo tienes)
+//
+// Variable de entorno en Railway (Settings → Variables):
+//   ANTHROPIC_API_KEY=sk-ant-...
+// (la consigues en console.anthropic.com → API Keys — cuenta de developer,
+// distinta a tu login normal de Claude.ai)
+//
+// Y confirma que FRONTEND_ORIGIN incluya tu dominio nuevo:
+//   FRONTEND_ORIGIN=https://crm.bitproximity.com,https://prospeccion.bitproximity.com
+
+// ---------------------------------------------------------------------------
+// 2) Proxy hacia la API de Anthropic (búsqueda con Apollo/Lusha, Maps/web,
+//    Instagram, LinkedIn, señales de intención)
+// ---------------------------------------------------------------------------
 router.post('/search', async (req, res) => {
-  const { provider, title, department, country, page = 0 } = req.body;
+  try {
+    const { prompt, mcp_servers, tools } = req.body;
 
-  if (provider === 'apollo') {
-    if (!process.env.APOLLO_API_KEY) return res.status(400).json({ error: 'Falta configurar APOLLO_API_KEY en Railway.' });
-
-    const params = new URLSearchParams({ page: String(page + 1), per_page: '25' });
-    (title || '').split(',').map((t) => t.trim()).filter(Boolean).forEach((t) => params.append('person_titles[]', t));
-    if (country) params.append('person_locations[]', country);
-
-    const apiRes = await fetch(`https://api.apollo.io/api/v1/mixed_people/api_search?${params.toString()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': process.env.APOLLO_API_KEY },
-    });
-    const data = await apiRes.json();
-    if (!apiRes.ok) {
-      const hint = apiRes.status === 403
-        ? ' Este endpoint de Apollo requiere una Master API key (Settings → API → generar con permisos completos), no una key restringida.'
-        : '';
-      return res.status(apiRes.status).json({ error: (data.error || data.message || 'Error de Apollo') + hint });
+    if (!prompt) {
+      return res.status(400).json({ error: 'Falta el campo "prompt" en el body.' });
     }
 
-    const candidates = (data.people || []).map((p) => ({
-      key: `apollo:${p.id}`,
-      provider: 'apollo',
-      providerId: p.id,
-      firstName: p.first_name || '',
-      lastName: p.last_name || '',
-      title: p.title || '',
-      companyName: p.organization?.name || '',
-      companyDomain: p.organization?.primary_domain || p.organization?.website_url || '',
-      country: p.country || '',
-      linkedinUrl: p.linkedin_url || '',
-    }));
-    return res.json({ candidates, total: data.pagination?.total_entries ?? candidates.length });
-  }
-
-  if (provider === 'lusha') {
-    if (!process.env.LUSHA_API_KEY) return res.status(400).json({ error: 'Falta configurar LUSHA_API_KEY en Railway.' });
-
-    const include = {};
-    if (department) include.departments = department.split(',').map((d) => d.trim()).filter(Boolean);
-    if (country) include.locations = [{ country }];
-    if (Object.keys(include).length === 0) {
-      return res.status(400).json({ error: 'Para Lusha indica al menos departamento o país (el filtro de cargo libre no está soportado por esta vía).' });
+    // El navegador manda solo la URL/nombre de cada servidor MCP — el token
+    // de autorización de cada servicio (Lusha, Apollo) se agrega acá, del
+    // lado del servidor, para no exponerlo nunca al cliente. Sin esto,
+    // Anthropic no puede autenticarse contra ese servidor y responde 400
+    // "Authentication error while communicating with MCP server".
+    //
+    // Si a un servidor le falta la key, se EXCLUYE en vez de mandarlo sin
+    // token — así una búsqueda no falla completa solo porque falte una de
+    // las dos (ej. tienes Lusha configurado pero Apollo todavía no).
+    //
+    // Variables de entorno necesarias en Railway:
+    //   LUSHA_API_KEY=...   (Lusha → Settings → API → API Keys)
+    //   APOLLO_API_KEY=...  (Apollo → Settings → Integrations → API)
+    let finalMcpServers = mcp_servers;
+    if (mcp_servers) {
+      finalMcpServers = mcp_servers
+        .map((server) => {
+          if (server.name === 'lusha' && process.env.LUSHA_API_KEY) {
+            return { ...server, authorization_token: process.env.LUSHA_API_KEY };
+          }
+          if (server.name === 'apollo' && process.env.APOLLO_API_KEY) {
+            return { ...server, authorization_token: process.env.APOLLO_API_KEY };
+          }
+          console.warn(`Sin API key configurada para "${server.name}" — se excluye de esta búsqueda.`);
+          return null;
+        })
+        .filter(Boolean);
     }
 
-    const apiRes = await fetch('https://api.lusha.com/v3/contacts/prospecting', {
+    const body = {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: prompt }]
+    };
+    if (finalMcpServers) body.mcp_servers = finalMcpServers;
+    if (tools) body.tools = tools;
+
+    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', api_key: process.env.LUSHA_API_KEY },
-      body: JSON.stringify({ pages: { page, size: 25 }, filters: { contacts: { include } } }),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'mcp-client-2025-04-04' // habilita mcp_servers en la API
+      },
+      body: JSON.stringify(body)
     });
-    const data = await apiRes.json();
-    if (!apiRes.ok) return res.status(apiRes.status).json({ error: data.message || 'Error de Lusha' });
 
-    const candidates = (data.results || []).map((r) => ({
-      key: `lusha:${r.id}`,
-      provider: 'lusha',
-      providerId: r.id,
-      firstName: r.firstName || '',
-      lastName: r.lastName || '',
-      title: r.jobTitle?.title || '',
-      companyName: r.company?.name || '',
-      companyDomain: r.company?.domain || '',
-      country: r.location?.country || '',
-      linkedinUrl: r.socialLinks?.linkedin || '',
-    }));
-    return res.json({ candidates, total: data.total ?? candidates.length });
+    const data = await anthropicRes.json();
+
+    if (!anthropicRes.ok) {
+      console.error('Anthropic API error:', data);
+      return res.status(anthropicRes.status).json(data);
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Proxy error:', err);
+    res.status(500).json({ error: 'Error interno en el proxy de prospección.' });
   }
-
-  res.status(400).json({ error: `Proveedor desconocido: ${provider}` });
 });
 
-// POST /api/prospecting/import  { candidates: [...], listName? }  (misma forma que devuelve /search)
-// Crea Empresa (si no existe, por nombre) + Contacto para cada candidato seleccionado.
-// Si se manda listName, además crea/reusa un tag con ese nombre y etiqueta a cada contacto importado —
-// así queda armada la "lista" (ej. "Apollo", "Lusha", o cualquier nombre custom) para filtrar después.
-// No revela email/telefono aquí — para eso usa los botones "Lusha"/"Apollo" ya existentes
-// en el detalle del contacto recién creado (evita gastar créditos en gente que luego no sirve).
-router.post('/import', async (req, res) => {
-  const { candidates, listName } = req.body;
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    return res.status(400).json({ error: 'candidates debe ser un array no vacío.' });
-  }
+// ---------------------------------------------------------------------------
+// 3) Opcional — agregar un prospecto a una Lista de Bit CRM
+// ---------------------------------------------------------------------------
+// ESQUELETO: reemplaza el bloque TODO con la lógica real de import a la
+// lista "Prospección B2B" que ya tienes en Bit CRM.
+router.post('/save-to-crm', async (req, res) => {
+  try {
+    const { list, company, contact, email, phone, country, industry, product, source } = req.body;
 
-  let tagId = null;
-  if (listName && listName.trim()) {
-    const { data: existingTag } = await supabase.from('tags').select('id').ilike('name', listName.trim()).maybeSingle();
-    if (existingTag) {
-      tagId = existingTag.id;
-    } else {
-      const { data: newTag, error: tagError } = await supabase.from('tags').insert({ name: listName.trim() }).select('id').single();
-      if (!tagError) tagId = newTag.id;
-    }
-  }
-
-  const created = [];
-  const skipped = [];
-
-  for (const c of candidates) {
-    let companyId = null;
-    if (c.companyName) {
-      const { data: existing } = await supabase.from('companies').select('id').ilike('name', c.companyName).maybeSingle();
-      if (existing) {
-        companyId = existing.id;
-      } else {
-        const { data: newCompany, error: companyError } = await supabase
-          .from('companies')
-          .insert({ name: c.companyName, country: c.country || null })
-          .select('id')
-          .single();
-        if (companyError) { skipped.push({ candidate: c, reason: companyError.message }); continue; }
-        companyId = newCompany.id;
-      }
+    if (!company) {
+      return res.status(400).json({ error: 'Falta "company" en el body.' });
     }
 
-    // Evita duplicar si ya existe un contacto con el mismo nombre en la misma empresa.
-    if (companyId && c.firstName) {
-      const { data: dupe } = await supabase
-        .from('contacts').select('id').eq('company_id', companyId)
-        .ilike('first_name', c.firstName).ilike('last_name', c.lastName || '').maybeSingle();
-      if (dupe) { skipped.push({ candidate: c, reason: 'Ya existe un contacto con este nombre en esta empresa.' }); continue; }
-    }
+    // TODO: reemplaza esto por tu lógica real, por ejemplo:
+    //   const targetList = await ListService.findOrCreateByName(list || 'Prospección B2B');
+    //   const newContact = await ContactService.create({ firstName: contact, email, phone, companyName: company, country });
+    //   await ListService.addContact(targetList.id, newContact.id);
+    //   return res.json({ list: targetList, contact: newContact });
 
-    const { data: contact, error: contactError } = await supabase
-      .from('contacts')
-      .insert({
-        first_name: c.firstName || null,
-        last_name: c.lastName || null,
-        position: c.title || null,
-        country: c.country || null,
-        company_id: companyId,
-        linkedin_url: c.linkedinUrl || null,
-        owner_id: req.teamMember.id,
-        source: c.provider === 'lusha' ? 'lusha_prospecting' : 'apollo_prospecting',
-      })
-      .select()
-      .single();
+    console.log('Agregar a lista de Bit CRM (pendiente de conectar a tu lógica real):', {
+      list, company, contact, email, phone, country, industry, product, source
+    });
 
-    if (contactError) { skipped.push({ candidate: c, reason: contactError.message }); continue; }
-    if (tagId) await supabase.from('taggables').insert({ tag_id: tagId, entity_type: 'contact', entity_id: contact.id });
-    created.push(contact);
+    res.status(501).json({
+      error: 'Endpoint no conectado todavía — reemplaza el TODO con tu lógica real de import a lista.'
+    });
+  } catch (err) {
+    console.error('Error guardando en la lista de Bit CRM:', err);
+    res.status(500).json({ error: 'Error interno guardando en la lista.' });
   }
+});
 
-  if (created.length) await logAudit('contact', created[0].id, 'created', req.teamMember.id, { bulk_import: created.length, source: 'prospecting' });
+// ---------------------------------------------------------------------------
+// 4) Opcional — leer el pipeline en vivo en vez de la foto fija del HTML
+// ---------------------------------------------------------------------------
+router.get('/pipeline-snapshot', async (req, res) => {
+  try {
+    // TODO: reemplaza esto por tu consulta real, por ejemplo:
+    //   const deals = await DealService.listOpen({ withContact: true });
+    //   return res.json(deals);
 
-  res.json({ imported: created.length, skipped: skipped.length, contacts: created, skipped_details: skipped, list_name: listName?.trim() || null });
+    res.status(501).json({
+      error: 'Endpoint no conectado todavía — reemplaza el TODO con tu consulta real de deals abiertos.'
+    });
+  } catch (err) {
+    console.error('Error leyendo pipeline:', err);
+    res.status(500).json({ error: 'Error interno leyendo el pipeline.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 5) Opcional — historial de "ya contactado" (evita que el equipo duplique outreach)
+// ---------------------------------------------------------------------------
+// Reemplaza el window.storage de Claude.ai por tu propia base — funciona sin
+// importar dónde esté hospedado el HTML. Usa Supabase (ya lo tienes importado
+// en middleware/auth.js con el mismo patrón).
+//
+// Antes de usar esto, crea la tabla en Supabase (SQL Editor):
+//
+//   create table prospecting_contacted (
+//     key text primary key,
+//     company text not null,
+//     channel text,
+//     step int,
+//     contacted_at timestamptz not null default now()
+//   );
+//
+// Y en el HTML, configura:
+//   const CONTACTED_API_URL = 'https://bit-crm-backend-production.up.railway.app/api/prospecting/contacted';
+const supabase = require('../config/supabase');
+
+router.get('/contacted', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('prospecting_contacted').select('*');
+    if (error) throw error;
+    const contacted = {};
+    (data || []).forEach(row => {
+      contacted[row.key] = { company: row.company, channel: row.channel, step: row.step, at: row.contacted_at };
+    });
+    res.json({ contacted });
+  } catch (err) {
+    console.error('Error leyendo historial de contacto:', err);
+    res.status(500).json({ error: 'Error interno leyendo el historial de contacto.' });
+  }
+});
+
+router.post('/contacted', async (req, res) => {
+  try {
+    const { key, company, channel, step, at } = req.body;
+    if (!key || !company) {
+      return res.status(400).json({ error: 'Faltan "key" o "company" en el body.' });
+    }
+    const { error } = await supabase.from('prospecting_contacted').upsert({
+      key, company, channel, step, contacted_at: at || new Date().toISOString()
+    });
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error guardando historial de contacto:', err);
+    res.status(500).json({ error: 'Error interno guardando el historial de contacto.' });
+  }
 });
 
 module.exports = router;
