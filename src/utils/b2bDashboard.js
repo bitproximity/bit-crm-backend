@@ -1,4 +1,4 @@
-function computeB2bDashboard(records) {
+function computeB2bDashboard(records, teamMembers = []) {
   const totalContacted = records.length;
   const meetings = records.filter((r) => r.meeting_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada');
   const totalMeetings = meetings.length;
@@ -9,9 +9,15 @@ function computeB2bDashboard(records) {
   const byMonth = {};
   const byPerson = {};
 
+  // Siembra la tabla con TODO el equipo activo, aunque todavía no tengan registros —
+  // así "Rendimiento por persona" siempre muestra a todos, no solo a quien ya tiene datos.
+  teamMembers.forEach((m) => {
+    byPerson[m.full_name] = { contacted: 0, meetings: 0, name: m.full_name };
+  });
+
   records.forEach((r) => {
-    const personKey = (r.executive && r.executive.trim()) || r.created_by || 'sin_asignar';
-    if (!byPerson[personKey]) byPerson[personKey] = { contacted: 0, meetings: 0, name: (r.executive && r.executive.trim()) || r.team_members?.full_name || 'Sin asignar' };
+    const personKey = (r.executive && r.executive.trim()) || r.team_members?.full_name || 'Sin asignar';
+    if (!byPerson[personKey]) byPerson[personKey] = { contacted: 0, meetings: 0, name: personKey };
     byPerson[personKey].contacted += 1;
   });
 
@@ -24,7 +30,7 @@ function computeB2bDashboard(records) {
       const month = r.meeting_date.slice(0, 7);
       byMonth[month] = (byMonth[month] || 0) + 1;
     }
-    const personKey = (r.executive && r.executive.trim()) || r.created_by || 'sin_asignar';
+    const personKey = (r.executive && r.executive.trim()) || r.team_members?.full_name || 'Sin asignar';
     if (byPerson[personKey]) byPerson[personKey].meetings += 1;
   });
 

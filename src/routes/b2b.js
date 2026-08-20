@@ -181,26 +181,34 @@ router.get('/dashboard', async (req, res) => {
   const { client_company_id } = req.query;
   if (!client_company_id) return res.status(400).json({ error: 'Falta client_company_id' });
 
-  const { data: records, error } = await supabase.from('b2b_records').select('*, team_members(full_name)').eq('client_company_id', client_company_id);
+  const [{ data: records, error }, { data: team }] = await Promise.all([
+    supabase.from('b2b_records').select('*, team_members(full_name)').eq('client_company_id', client_company_id),
+    supabase.from('team_members').select('full_name').eq('active', true),
+  ]);
   if (error) return res.status(500).json({ error: error.message });
-  res.json(computeB2bDashboard(records));
+  res.json(computeB2bDashboard(records, team || []));
 });
 
 // GET /api/b2b/leaderboard — rendimiento por persona cruzando TODOS los clientes,
 // para comparar el equipo de Outbound en conjunto (no cliente por cliente).
 router.get('/leaderboard', async (req, res) => {
-  const { data: records, error } = await supabase.from('b2b_records').select('*, team_members(full_name), companies(name)');
+  const [{ data: records, error }, { data: team }] = await Promise.all([
+    supabase.from('b2b_records').select('*, team_members(full_name), companies(name)'),
+    supabase.from('team_members').select('full_name').eq('active', true),
+  ]);
   if (error) return res.status(500).json({ error: error.message });
 
-  const global = computeB2bDashboard(records);
+  const global = computeB2bDashboard(records, team || []);
 
   // Además del total, desglosa cada persona por cliente para ver dónde está parada su carga.
+  // Se siembra igual con todo el equipo (aunque no tengan registros en ningún cliente todavía).
   const byPersonByClient = {};
+  (team || []).forEach((m) => { byPersonByClient[m.full_name] = { name: m.full_name, clients: {} }; });
+
   records.forEach((r) => {
-    const personKey = (r.executive && r.executive.trim()) || r.created_by || 'sin_asignar';
-    const personName = (r.executive && r.executive.trim()) || r.team_members?.full_name || 'Sin asignar';
+    const personKey = (r.executive && r.executive.trim()) || r.team_members?.full_name || 'Sin asignar';
     const clientName = r.companies?.name || 'Sin cliente';
-    if (!byPersonByClient[personKey]) byPersonByClient[personKey] = { name: personName, clients: {} };
+    if (!byPersonByClient[personKey]) byPersonByClient[personKey] = { name: personKey, clients: {} };
     if (!byPersonByClient[personKey].clients[clientName]) byPersonByClient[personKey].clients[clientName] = { contacted: 0, meetings: 0 };
     byPersonByClient[personKey].clients[clientName].contacted += 1;
     if (r.meeting_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada') {
