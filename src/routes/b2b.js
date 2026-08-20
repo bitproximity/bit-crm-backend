@@ -9,6 +9,16 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePage('b2b'));
 
+// Personas que hacen prospección/reuniones para Bit Prospect (no todo el equipo del CRM
+// aplica — ej. soporte técnico no debe aparecer en "Rendimiento por persona").
+// Si el equipo de prospección cambia, actualiza esta lista.
+const BIT_PROSPECT_TEAM_EXCLUDE = ['Diego Molina'];
+
+async function getBitProspectTeam() {
+  const { data } = await supabase.from('team_members').select('full_name').eq('active', true);
+  return (data || []).filter((m) => !BIT_PROSPECT_TEAM_EXCLUDE.includes(m.full_name));
+}
+
 // GET /api/b2b/clients — empresas marcadas como clientes del servicio
 router.get('/clients', async (req, res) => {
   const { data, error } = await supabase
@@ -181,20 +191,20 @@ router.get('/dashboard', async (req, res) => {
   const { client_company_id } = req.query;
   if (!client_company_id) return res.status(400).json({ error: 'Falta client_company_id' });
 
-  const [{ data: records, error }, { data: team }] = await Promise.all([
+  const [{ data: records, error }, team] = await Promise.all([
     supabase.from('b2b_records').select('*, team_members(full_name)').eq('client_company_id', client_company_id),
-    supabase.from('team_members').select('full_name').eq('active', true),
+    getBitProspectTeam(),
   ]);
   if (error) return res.status(500).json({ error: error.message });
-  res.json(computeB2bDashboard(records, team || []));
+  res.json(computeB2bDashboard(records, team));
 });
 
 // GET /api/b2b/leaderboard — rendimiento por persona cruzando TODOS los clientes,
 // para comparar el equipo de Outbound en conjunto (no cliente por cliente).
 router.get('/leaderboard', async (req, res) => {
-  const [{ data: records, error }, { data: team }] = await Promise.all([
+  const [{ data: records, error }, team] = await Promise.all([
     supabase.from('b2b_records').select('*, team_members(full_name), companies(name)'),
-    supabase.from('team_members').select('full_name').eq('active', true),
+    getBitProspectTeam(),
   ]);
   if (error) return res.status(500).json({ error: error.message });
 
