@@ -74,6 +74,14 @@ router.delete('/records/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// DELETE /api/b2b/clients/:id/records — borra TODOS los registros de un cliente puntual
+// (para recargar desde cero sin arriesgar datos de otras marcas)
+router.delete('/clients/:id/records', async (req, res) => {
+  const { error, count } = await supabase.from('b2b_records').delete({ count: 'exact' }).eq('client_company_id', req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ deleted: count || 0 });
+});
+
 // POST /api/b2b/import  { client_company_id, mode: 'contactados' | 'reuniones', records: [...] }
 // Carga masiva desde CSV. En modo 'reuniones', si el target_company ya existe como
 // 'contactado' para ese cliente, lo actualiza en vez de duplicar la fila.
