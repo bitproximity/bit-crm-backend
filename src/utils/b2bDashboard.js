@@ -1,3 +1,7 @@
+function normalizeCountry(c) {
+  return (c || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function computeB2bDashboard(records, teamMembers = []) {
   const totalContacted = records.length;
   const meetings = records.filter((r) => r.meeting_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada');
@@ -5,7 +9,7 @@ function computeB2bDashboard(records, teamMembers = []) {
   const conversionRate = totalContacted ? Math.round((totalMeetings / totalContacted) * 100) : 0;
 
   const byIndustry = {};
-  const byCountry = {};
+  const byCountry = {}; // key: país normalizado (sin mayúsculas/tildes) -> { label, count }
   const byMonth = {};
   const byPerson = {};
 
@@ -23,9 +27,17 @@ function computeB2bDashboard(records, teamMembers = []) {
 
   meetings.forEach((r) => {
     const industry = r.industry || 'Sin especificar';
-    const country = r.country || 'Sin especificar';
     byIndustry[industry] = (byIndustry[industry] || 0) + 1;
-    byCountry[country] = (byCountry[country] || 0) + 1;
+
+    const countryLabel = r.country?.trim() || 'Sin especificar';
+    const countryKey = r.country ? normalizeCountry(r.country) : 'sin especificar';
+    if (!byCountry[countryKey]) byCountry[countryKey] = { label: countryLabel, count: 0 };
+    // Prefiere como etiqueta la versión que empiece con mayúscula, si aparece.
+    if (countryLabel[0] === countryLabel[0]?.toUpperCase() && byCountry[countryKey].label[0] !== byCountry[countryKey].label[0]?.toUpperCase()) {
+      byCountry[countryKey].label = countryLabel;
+    }
+    byCountry[countryKey].count += 1;
+
     if (r.meeting_date) {
       const month = r.meeting_date.slice(0, 7);
       byMonth[month] = (byMonth[month] || 0) + 1;
@@ -42,7 +54,7 @@ function computeB2bDashboard(records, teamMembers = []) {
     conversion_rate: conversionRate,
     meetings_this_month: byMonth[thisMonthKey] || 0,
     by_industry: Object.entries(byIndustry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-    by_country: Object.entries(byCountry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+    by_country: Object.values(byCountry).map(({ label, count }) => ({ name: label, count })).sort((a, b) => b.count - a.count),
     by_month: Object.entries(byMonth).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_person: Object.values(byPerson)
       .map((p) => ({ ...p, conversion: p.contacted ? Math.round((p.meetings / p.contacted) * 100) : 0 }))
