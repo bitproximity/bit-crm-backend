@@ -96,11 +96,14 @@ router.delete('/clients/:id/records', async (req, res) => {
   res.json({ deleted: count || 0 });
 });
 
-// POST /api/b2b/import  { client_company_id, mode: 'contactados' | 'reuniones', records: [...] }
-// Carga masiva desde CSV. En modo 'reuniones', si el target_company ya existe como
-// 'contactado' para ese cliente, lo actualiza en vez de duplicar la fila.
+// POST /api/b2b/import  { client_company_id, mode: 'contactados' | 'reuniones', records: [...], mergeByCompany? }
+// Carga masiva desde CSV. En modo 'reuniones', si mergeByCompany=true (default) y el target_company
+// ya existe como 'contactado' para ese cliente, lo actualiza en vez de duplicar la fila — pensado para
+// una base donde cada empresa aparece una sola vez. Si mergeByCompany=false, cada fila se inserta
+// siempre como un registro nuevo — pensado para un historial donde la misma empresa puede tener
+// varias reuniones reales en fechas distintas (no se deben fusionar).
 router.post('/import', async (req, res) => {
-  const { client_company_id, mode, records } = req.body;
+  const { client_company_id, mode, records, mergeByCompany = true } = req.body;
   if (!client_company_id || !Array.isArray(records) || records.length === 0) {
     return res.status(400).json({ error: 'Falta client_company_id o records' });
   }
@@ -110,18 +113,24 @@ router.post('/import', async (req, res) => {
   const BATCH = 500;
 
   if (mode === 'reuniones') {
-    const { data: existing } = await supabase
-      .from('b2b_records')
-      .select('id, target_company')
-      .eq('client_company_id', client_company_id);
-    const existingMap = new Map((existing || []).map((r) => [r.target_company.toLowerCase().trim(), r.id]));
+    const today = new Date().toISOString().slice(0, 10);
+    const statusFor = (r) => (r.meeting_date && r.meeting_date < today ? 'reunion_realizada' : 'reunion_agendada');
+
+    const existingMap = new Map();
+    if (mergeByCompany) {
+      const { data: existing } = await supabase
+        .from('b2b_records')
+        .select('id, target_company')
+        .eq('client_company_id', client_company_id);
+      (existing || []).forEach((r) => existingMap.set(r.target_company.toLowerCase().trim(), r.id));
+    }
 
     const toInsert = [];
     for (const r of records) {
       const key = (r.target_company || '').toLowerCase().trim();
-      if (key && existingMap.has(key)) {
+      if (mergeByCompany && key && existingMap.has(key)) {
         await supabase.from('b2b_records').update({
-          status: 'reunion_agendada',
+          status: statusFor(r),
           meeting_date: r.meeting_date || null,
           target_contact: r.target_contact || undefined,
           target_position: r.target_position || undefined,
@@ -138,7 +147,7 @@ router.post('/import', async (req, res) => {
           industry: r.industry || null, country: r.country || null,
           target_position: r.target_position || null, target_email: r.target_email || null,
           target_phone: r.target_phone || null, executive: r.executive || null,
-          meeting_date: r.meeting_date || null, status: 'reunion_agendada', notes: r.notes || null,
+          meeting_date: r.meeting_date || null, status: statusFor(r), notes: r.notes || null,
           created_by: req.teamMember.id,
         });
       }
