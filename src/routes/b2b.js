@@ -188,8 +188,8 @@ router.get('/leaderboard', async (req, res) => {
   // Además del total, desglosa cada persona por cliente para ver dónde está parada su carga.
   const byPersonByClient = {};
   records.forEach((r) => {
-    const personKey = r.created_by || 'sin_asignar';
-    const personName = r.team_members?.full_name || 'Sin asignar';
+    const personKey = (r.executive && r.executive.trim()) || r.created_by || 'sin_asignar';
+    const personName = (r.executive && r.executive.trim()) || r.team_members?.full_name || 'Sin asignar';
     const clientName = r.companies?.name || 'Sin cliente';
     if (!byPersonByClient[personKey]) byPersonByClient[personKey] = { name: personName, clients: {} };
     if (!byPersonByClient[personKey].clients[clientName]) byPersonByClient[personKey].clients[clientName] = { contacted: 0, meetings: 0 };
