@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { syncActivityToCalendar } = require('../utils/googleCalendarSync');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -71,7 +72,10 @@ router.post('/', async (req, res) => {
   const payload = { ...req.body, author_id: req.teamMember.id };
   const { data, error } = await supabase.from('activities').insert(payload).select().single();
   if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json(data);
+
+  // Fire-and-forget: si falla el calendario, la actividad ya quedó guardada de todas formas.
+  const calendarResult = await syncActivityToCalendar(data);
+  res.status(201).json({ ...data, calendar_sync: calendarResult });
 });
 
 // PATCH /api/activities/:id  { done?, title?, due_date?, summary? }
@@ -84,7 +88,9 @@ router.patch('/:id', async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+
+  const calendarResult = await syncActivityToCalendar(data);
+  res.json({ ...data, calendar_sync: calendarResult });
 });
 
 // Inserta un array grande en lotes (evita timeouts/payloads gigantes en Supabase)

@@ -91,4 +91,68 @@ async function deleteTaskFromCalendar(task) {
   }
 }
 
-module.exports = { syncTaskToCalendar, deleteTaskFromCalendar };
+const ACTIVITY_TYPE_ICON = { llamada: '📞', email: '✉️', reunion: '🤝', nota: '📝', whatsapp: '💬', tarea: '✅' };
+
+// Crea, actualiza o borra el evento de Google Calendar de una actividad (llamada, reunión, etc.)
+// registrada en el detalle de un trato/contacto/empresa. Mismo criterio que syncTaskToCalendar:
+// nunca lanza, para no tumbar el guardado de la actividad si el calendario falla.
+async function syncActivityToCalendar(activity) {
+  try {
+    if (!activity.author_id) return { ok: false, reason: 'La actividad no tiene autor.' };
+
+    const conn = await getCalendarClientForUser(activity.author_id);
+    if (!conn) return { ok: false, reason: 'No tienes tu Google conectado (Mi Perfil → Gmail + Google Calendar).' };
+    const { calendar, email } = conn;
+
+    const shouldHaveEvent = !!activity.due_date && !activity.done;
+
+    if (!shouldHaveEvent) {
+      if (activity.google_event_id) {
+        await calendar.events.delete({ calendarId: 'primary', eventId: activity.google_event_id }).catch(() => {});
+        await supabase.from('activities').update({ google_event_id: null }).eq('id', activity.id);
+      }
+      return { ok: false, reason: !activity.due_date ? 'La actividad no tiene fecha/hora.' : 'La actividad ya está completada.' };
+    }
+
+    const start = new Date(activity.due_date);
+    const end = new Date(start.getTime() + 30 * 60000); // bloque de 30 min por defecto
+    const icon = ACTIVITY_TYPE_ICON[activity.type] || '📌';
+
+    const eventBody = {
+      summary: `${icon} ${activity.title || activity.summary || 'Actividad'}`,
+      description: `Actividad de Bit CRM (${activity.type})\n\nVer en el CRM: ${PUBLIC_APP_URL}/activities`,
+      start: { dateTime: start.toISOString() },
+      end: { dateTime: end.toISOString() },
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'popup', minutes: 30 },
+          { method: 'email', minutes: 60 },
+        ],
+      },
+    };
+
+    let eventLink;
+    if (activity.google_event_id) {
+      try {
+        const { data } = await calendar.events.update({ calendarId: 'primary', eventId: activity.google_event_id, requestBody: eventBody });
+        eventLink = data.htmlLink;
+      } catch (err) {
+        const { data } = await calendar.events.insert({ calendarId: 'primary', requestBody: eventBody });
+        await supabase.from('activities').update({ google_event_id: data.id }).eq('id', activity.id);
+        eventLink = data.htmlLink;
+      }
+    } else {
+      const { data } = await calendar.events.insert({ calendarId: 'primary', requestBody: eventBody });
+      await supabase.from('activities').update({ google_event_id: data.id }).eq('id', activity.id);
+      eventLink = data.htmlLink;
+    }
+
+    return { ok: true, eventLink, connectedEmail: email };
+  } catch (err) {
+    console.error('Error sincronizando actividad con Google Calendar:', activity.id, err.message);
+    return { ok: false, reason: err.message };
+  }
+}
+
+module.exports = { syncTaskToCalendar, deleteTaskFromCalendar, syncActivityToCalendar };
