@@ -82,12 +82,15 @@ router.get('/meetings', async (req, res) => {
   const since = new Date();
   since.setDate(since.getDate() - weeks * 7);
 
+  // Lee de b2b_records (Bit Prospect) — es donde vive la data real de reuniones que se está
+  // cargando por cliente. Antes leía de "activities" tipo reunión, una tabla que nunca se
+  // llenó, por eso siempre daba 0.
   const { data: meetings, error } = await supabase
-    .from('activities')
-    .select('occurred_at, author_id, team_members(full_name)')
-    .eq('type', 'reunion')
-    .gte('occurred_at', since.toISOString())
-    .order('occurred_at');
+    .from('b2b_records')
+    .select('meeting_date, executive, created_by, team_members(full_name)')
+    .not('meeting_date', 'is', null)
+    .gte('meeting_date', since.toISOString().slice(0, 10))
+    .order('meeting_date');
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -95,7 +98,7 @@ router.get('/meetings', async (req, res) => {
   const byOwner = {};
 
   meetings.forEach((m) => {
-    const d = new Date(m.occurred_at);
+    const d = new Date(`${m.meeting_date}T00:00:00`);
     // Semana ISO simplificada: lunes de esa semana como clave
     const monday = new Date(d);
     monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
@@ -103,7 +106,7 @@ router.get('/meetings', async (req, res) => {
 
     byWeek[weekKey] = (byWeek[weekKey] || 0) + 1;
 
-    const owner = m.team_members?.full_name || 'Sin asignar';
+    const owner = (m.executive && m.executive.trim()) || m.team_members?.full_name || 'Sin asignar';
     byOwner[owner] = (byOwner[owner] || 0) + 1;
   });
 
