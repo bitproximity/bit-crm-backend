@@ -98,6 +98,18 @@ router.delete('/records/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// PATCH /api/b2b/clients/:id/mark-all-realizada — marca TODOS los registros de un cliente como
+// "reunión realizada" de una sola pasada (para bases que ya fueron reuniones reales aunque no
+// se haya cargado la fecha exacta en el archivo original).
+router.patch('/clients/:id/mark-all-realizada', async (req, res) => {
+  const { error, count } = await supabase
+    .from('b2b_records')
+    .update({ status: 'reunion_realizada' }, { count: 'exact' })
+    .eq('client_company_id', req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ updated: count || 0 });
+});
+
 // DELETE /api/b2b/clients/:id/records — borra TODOS los registros de un cliente puntual
 // (para recargar desde cero sin arriesgar datos de otras marcas)
 router.delete('/clients/:id/records', async (req, res) => {
