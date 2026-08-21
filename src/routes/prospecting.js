@@ -106,6 +106,45 @@ router.post('/search', async (req, res) => {
 // ---------------------------------------------------------------------------
 // ESQUELETO: reemplaza el bloque TODO con la lógica real de import a la
 // lista "Prospección B2B" que ya tienes en Bit CRM.
+// ---------------------------------------------------------------------------
+// API interna: conecta Prospección B2B con tu propia API de Bit CRM
+// ---------------------------------------------------------------------------
+// En vez de hablarle directo a Supabase (y arriesgar desincronizar la lógica
+// de negocio que ya vive en routes/contacts.js y routes/deals.js), estos
+// endpoints llaman a TU PROPIA API pública — la misma que ya usa tu
+// frontend — autenticándose como un servicio, con una API key tipo
+// "bitcrm_mcp_..." (las mismas que ya soporta tu middleware/auth.js).
+//
+// Cómo conseguir esa key:
+//   Revisa /api/mcp-keys en tu backend (ya tienes esa ruta montada) — ahí
+//   debería haber una forma de generar una key de servicio. Si no la
+//   encuentras en la UI, dime y la generamos directo en Supabase.
+//
+// Variable de entorno necesaria en Railway:
+//   BITCRM_SERVICE_API_KEY=bitcrm_mcp_...
+//   BITCRM_BASE_URL=https://bit-crm-backend-production.up.railway.app  (o la que uses)
+
+const BITCRM_BASE_URL = process.env.BITCRM_BASE_URL || 'https://bit-crm-backend-production.up.railway.app';
+
+async function bitcrmRequest(method, path, body) {
+  const res = await fetch(`${BITCRM_BASE_URL}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.BITCRM_SERVICE_API_KEY}`
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data?.error || `Bit CRM API respondió ${res.status}`);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
 router.post('/save-to-crm', async (req, res) => {
   try {
     const { list, company, contact, email, phone, country, industry, product, source } = req.body;
@@ -113,23 +152,37 @@ router.post('/save-to-crm', async (req, res) => {
     if (!company) {
       return res.status(400).json({ error: 'Falta "company" en el body.' });
     }
+    if (!process.env.BITCRM_SERVICE_API_KEY) {
+      return res.status(501).json({ error: 'Falta BITCRM_SERVICE_API_KEY en las variables de entorno.' });
+    }
 
-    // TODO: reemplaza esto por tu lógica real, por ejemplo:
-    //   const targetList = await ListService.findOrCreateByName(list || 'Prospección B2B');
-    //   const newContact = await ContactService.create({ firstName: contact, email, phone, companyName: company, country });
-    //   await ListService.addContact(targetList.id, newContact.id);
-    //   return res.json({ list: targetList, contact: newContact });
-
-    console.log('Agregar a lista de Bit CRM (pendiente de conectar a tu lógica real):', {
-      list, company, contact, email, phone, country, industry, product, source
+    // AJUSTA los nombres de campo de acá abajo a lo que realmente espera tu
+    // POST /api/contacts (no tengo visibilidad del payload exacto — si el
+    // nombre del campo es distinto, ej. "first_name" en vez de "firstName",
+    // solo hay que cambiarlo aquí).
+    const newContact = await bitcrmRequest('POST', '/api/contacts', {
+      firstName: contact,
+      email: email || undefined,
+      phone: phone || undefined,
+      companyName: company,
+      country: country || undefined,
+      notes: `Prospección B2B · ${industry || ''} · ${product || ''} · fuente: ${source || 'motor-prospeccion'}`.trim()
     });
 
-    res.status(501).json({
-      error: 'Endpoint no conectado todavía — reemplaza el TODO con tu lógica real de import a lista.'
+    // Igual acá — AJUSTA a lo que espera tu POST /api/deals.
+    const newDeal = await bitcrmRequest('POST', '/api/deals', {
+      title: company,
+      contactId: newContact.id,
+      value: 0,
+      status: 'abierto',
+      source: source || 'prospeccion-b2b',
+      listName: list || 'Prospección B2B'
     });
+
+    res.json({ contact: newContact, deal: newDeal });
   } catch (err) {
-    console.error('Error guardando en la lista de Bit CRM:', err);
-    res.status(500).json({ error: 'Error interno guardando en la lista.' });
+    console.error('Error guardando en Bit CRM:', err);
+    res.status(err.status || 500).json({ error: err.message || 'Error interno guardando en Bit CRM.' });
   }
 });
 
@@ -138,16 +191,19 @@ router.post('/save-to-crm', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/pipeline-snapshot', async (req, res) => {
   try {
-    // TODO: reemplaza esto por tu consulta real, por ejemplo:
-    //   const deals = await DealService.listOpen({ withContact: true });
-    //   return res.json(deals);
+    if (!process.env.BITCRM_SERVICE_API_KEY) {
+      return res.status(501).json({ error: 'Falta BITCRM_SERVICE_API_KEY en las variables de entorno.' });
+    }
 
-    res.status(501).json({
-      error: 'Endpoint no conectado todavía — reemplaza el TODO con tu consulta real de deals abiertos.'
-    });
+    // AJUSTA la ruta/parámetros a como esté armado tu GET /api/deals real
+    // (paginación, filtro por status=abierto, etc). Este es un punto de
+    // partida — dime la forma exacta y lo dejo calzado.
+    const deals = await bitcrmRequest('GET', '/api/deals?status=abierto');
+
+    res.json(deals);
   } catch (err) {
     console.error('Error leyendo pipeline:', err);
-    res.status(500).json({ error: 'Error interno leyendo el pipeline.' });
+    res.status(err.status || 500).json({ error: err.message || 'Error interno leyendo el pipeline.' });
   }
 });
 
