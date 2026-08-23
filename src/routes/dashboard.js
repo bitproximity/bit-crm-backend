@@ -16,6 +16,8 @@ router.get('/', async (req, res) => {
     { count: myOpenTasks },
     { data: valueRows },
     { data: rates },
+    { data: pipelineValueRows },
+    { data: wonRecentRows },
   ] = await Promise.all([
     supabase.from('deals').select('*', { count: 'exact', head: true }).eq('status', 'abierto'),
     supabase
@@ -35,13 +37,32 @@ router.get('/', async (req, res) => {
       .neq('status', 'completada'),
     supabase.from('deals').select('value, currency').eq('status', 'abierto'),
     supabase.from('exchange_rates').select('*'),
+    supabase.from('deals').select('value, currency, pipelines(name)').eq('status', 'abierto'),
+    supabase.from('deals').select('title, value, currency, closed_at, companies(name)').eq('status', 'ganado').order('closed_at', { ascending: false }).limit(5),
   ]);
 
   const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
-  const openPipelineValueUsd = (valueRows || []).reduce((sum, d) => {
-    const rate = rateMap[d.currency] ?? 1;
-    return sum + Number(d.value || 0) * rate;
-  }, 0);
+  const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
+  const openPipelineValueUsd = (valueRows || []).reduce((sum, d) => sum + toUsd(d.value, d.currency), 0);
+
+  const byPipeline = {};
+  (pipelineValueRows || []).forEach((d) => {
+    const name = d.pipelines?.name || 'Sin pipeline';
+    if (!byPipeline[name]) byPipeline[name] = { count: 0, value_usd: 0 };
+    byPipeline[name].count += 1;
+    byPipeline[name].value_usd += toUsd(d.value, d.currency);
+  });
+  const pipelineBreakdown = Object.entries(byPipeline)
+    .map(([name, v]) => ({ name, count: v.count, value_usd: Math.round(v.value_usd) }))
+    .sort((a, b) => b.value_usd - a.value_usd)
+    .slice(0, 6);
+
+  const recentWins = (wonRecentRows || []).map((d) => ({
+    title: d.title,
+    company: d.companies?.name || null,
+    value_usd: Math.round(toUsd(d.value, d.currency)),
+    closed_at: d.closed_at,
+  }));
 
   res.json({
     open_deals: openDeals || 0,
@@ -49,6 +70,8 @@ router.get('/', async (req, res) => {
     overdue_tasks: overdueTasks || 0,
     my_open_tasks: myOpenTasks || 0,
     open_pipeline_value_usd: Math.round(openPipelineValueUsd),
+    pipeline_breakdown: pipelineBreakdown,
+    recent_wins: recentWins,
   });
 });
 
