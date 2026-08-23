@@ -88,9 +88,23 @@ router.delete('/stages/:stageId', requireRole('admin'), async (req, res) => {
 // POST /api/pipelines/:id/stages — agregar etapa
 router.post('/:id/stages', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
+  const { name } = req.body;
+
+  // La posición se calcula siempre en el servidor, contra el dato real en la base —
+  // el frontend mandaba "cantidad de etapas + 1", que choca con la posición de una
+  // etapa existente en cuanto hay huecos en la numeración (ej. tras borrar una etapa).
+  const { data: existing, error: fetchError } = await supabase
+    .from('pipeline_stages')
+    .select('position')
+    .eq('pipeline_id', id)
+    .order('position', { ascending: false })
+    .limit(1);
+  if (fetchError) return res.status(400).json({ error: fetchError.message });
+  const nextPosition = existing.length > 0 ? existing[0].position + 1 : 0;
+
   const { data, error } = await supabase
     .from('pipeline_stages')
-    .insert({ ...req.body, pipeline_id: id })
+    .insert({ name, pipeline_id: id, position: nextPosition })
     .select()
     .single();
 

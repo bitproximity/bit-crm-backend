@@ -102,11 +102,20 @@ router.delete('/records/:id', async (req, res) => {
 // "reunión realizada" de una sola pasada (para bases que ya fueron reuniones reales aunque no
 // se haya cargado la fecha exacta en el archivo original).
 router.patch('/clients/:id/mark-all-realizada', async (req, res) => {
+  // No pisa realized_date si un registro ya la tenía cargada — solo completa la de hoy
+  // para los que todavía no tienen fecha de realización.
   const { error, count } = await supabase
     .from('b2b_records')
     .update({ status: 'reunion_realizada' }, { count: 'exact' })
     .eq('client_company_id', req.params.id);
   if (error) return res.status(400).json({ error: error.message });
+
+  await supabase
+    .from('b2b_records')
+    .update({ realized_date: new Date().toISOString().slice(0, 10) })
+    .eq('client_company_id', req.params.id)
+    .is('realized_date', null);
+
   res.json({ updated: count || 0 });
 });
 
@@ -136,7 +145,7 @@ router.post('/import', async (req, res) => {
 
   if (mode === 'reuniones') {
     const today = new Date().toISOString().slice(0, 10);
-    const statusFor = (r) => (r.meeting_date && r.meeting_date < today ? 'reunion_realizada' : 'reunion_agendada');
+    const statusFor = (r) => (r.realized_date ? 'reunion_realizada' : (r.meeting_date && r.meeting_date < today ? 'reunion_realizada' : 'reunion_agendada'));
 
     const existingMap = new Map();
     if (mergeByCompany) {
@@ -154,6 +163,7 @@ router.post('/import', async (req, res) => {
         await supabase.from('b2b_records').update({
           status: statusFor(r),
           meeting_date: r.meeting_date || null,
+          realized_date: r.realized_date || null,
           target_contact: r.target_contact || undefined,
           target_position: r.target_position || undefined,
           target_email: r.target_email || undefined,
@@ -169,7 +179,7 @@ router.post('/import', async (req, res) => {
           industry: r.industry || null, country: r.country || null,
           target_position: r.target_position || null, target_email: r.target_email || null,
           target_phone: r.target_phone || null, executive: r.executive || null,
-          meeting_date: r.meeting_date || null, status: statusFor(r), notes: r.notes || null,
+          meeting_date: r.meeting_date || null, realized_date: r.realized_date || null, status: statusFor(r), notes: r.notes || null,
           created_by: req.teamMember.id,
         });
       }
@@ -233,7 +243,7 @@ router.get('/leaderboard', async (req, res) => {
     if (!byPersonByClient[personKey]) byPersonByClient[personKey] = { name: personKey, clients: {} };
     if (!byPersonByClient[personKey].clients[clientName]) byPersonByClient[personKey].clients[clientName] = { contacted: 0, meetings: 0 };
     byPersonByClient[personKey].clients[clientName].contacted += 1;
-    if (r.meeting_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada') {
+    if (r.meeting_date || r.realized_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada') {
       byPersonByClient[personKey].clients[clientName].meetings += 1;
     }
   });
