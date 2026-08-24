@@ -121,6 +121,14 @@ router.patch('/:id/stages/reorder', requireRole('admin'), async (req, res) => {
   if (!Array.isArray(ordered_ids) || ordered_ids.length === 0) {
     return res.status(400).json({ error: 'ordered_ids debe ser un array de IDs.' });
   }
+  // Se mueve en DOS pasadas para nunca chocar contra el índice único (pipeline_id, position):
+  // primero todas a posiciones temporales muy altas (garantizado libres), luego a su posición
+  // final. Hacerlo en una sola pasada falla en cuanto la posición nueva de una etapa coincide
+  // con la posición actual (todavía sin actualizar) de otra.
+  for (let i = 0; i < ordered_ids.length; i++) {
+    const { error } = await supabase.from('pipeline_stages').update({ position: 10000 + i }).eq('id', ordered_ids[i]).eq('pipeline_id', req.params.id);
+    if (error) return res.status(400).json({ error: `Falló moviendo el ID ${ordered_ids[i]} a posición temporal: ${error.message}` });
+  }
   for (let i = 0; i < ordered_ids.length; i++) {
     const { error } = await supabase.from('pipeline_stages').update({ position: i }).eq('id', ordered_ids[i]).eq('pipeline_id', req.params.id);
     if (error) return res.status(400).json({ error: `Falló en el ID ${ordered_ids[i]}: ${error.message}` });
