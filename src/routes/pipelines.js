@@ -136,12 +136,12 @@ router.patch('/:id/stages/reorder', requireRole('admin'), async (req, res) => {
   res.json({ reordered: true, count: ordered_ids.length });
 });
 
-// POST /api/pipelines/clone-stages  { source_pipeline_id, target_pipeline_ids: [...] }
-// Copia las etapas del pipeline de origen hacia los pipelines destino, SOLO agregando
-// las que falten por nombre (sin distinguir mayúsculas) — nunca borra ni renombra una
-// etapa existente, para no perder ni desordenar tratos que ya estén en otra etapa.
+// POST /api/pipelines/clone-stages  { source_pipeline_id, target_pipeline_ids: [...], replace? }
+// Copia las etapas del pipeline de origen hacia los destinos. Si replace=true (default),
+// además BORRA las etapas del destino que no estén en el origen — si tenían tratos, esos
+// tratos se mueven primero a la primera etapa del set nuevo, nunca se pierden.
 router.post('/clone-stages', requireRole('admin'), async (req, res) => {
-  const { source_pipeline_id, target_pipeline_ids } = req.body;
+  const { source_pipeline_id, target_pipeline_ids, replace = true } = req.body;
   if (!source_pipeline_id || !Array.isArray(target_pipeline_ids) || target_pipeline_ids.length === 0) {
     return res.status(400).json({ error: 'Falta source_pipeline_id o target_pipeline_ids.' });
   }
@@ -154,6 +154,7 @@ router.post('/clone-stages', requireRole('admin'), async (req, res) => {
   if (sourceError) return res.status(400).json({ error: sourceError.message });
   if (sourceStages.length === 0) return res.status(400).json({ error: 'El pipeline de origen no tiene etapas.' });
 
+  const sourceNameSet = new Set(sourceStages.map((s) => s.name.toLowerCase().trim()));
   const summary = [];
 
   for (const targetId of target_pipeline_ids) {
@@ -169,15 +170,50 @@ router.post('/clone-stages', requireRole('admin'), async (req, res) => {
     const missing = sourceStages.filter((s) => !existingNames.has(s.name.toLowerCase().trim()));
     let nextPosition = existing.length > 0 ? Math.max(...existing.map((s) => s.position)) + 1 : 0;
 
+    const addedNames = [];
+    let firstNewStageId = null;
     for (const stage of missing) {
-      const { error: insertError } = await supabase
+      const { data: created, error: insertError } = await supabase
         .from('pipeline_stages')
-        .insert({ pipeline_id: targetId, name: stage.name, position: nextPosition });
+        .insert({ pipeline_id: targetId, name: stage.name, position: nextPosition })
+        .select('id')
+        .single();
       if (insertError) { summary.push({ pipeline_id: targetId, error: insertError.message }); continue; }
+      if (!firstNewStageId) firstNewStageId = created.id;
+      addedNames.push(stage.name);
       nextPosition += 1;
     }
 
-    summary.push({ pipeline_id: targetId, added: missing.map((s) => s.name) });
+    let removedNames = [];
+    let movedDealsCount = 0;
+    if (replace) {
+      const toRemove = existing.filter((s) => !sourceNameSet.has(s.name.toLowerCase().trim()));
+      if (toRemove.length > 0) {
+        // La etapa destino de los tratos huérfanos: la primera etapa del set nuevo, por
+        // nombre (no la recién creada arriba, que puede no ser la primera si ya existía).
+        const firstSourceName = sourceStages[0].name.toLowerCase().trim();
+        const { data: firstStage } = await supabase
+          .from('pipeline_stages')
+          .select('id')
+          .eq('pipeline_id', targetId)
+          .ilike('name', sourceStages[0].name)
+          .maybeSingle();
+        const fallbackStageId = firstStage?.id || firstNewStageId;
+
+        for (const stage of toRemove) {
+          const { count } = await supabase.from('deals').select('*', { count: 'exact', head: true }).eq('stage_id', stage.id);
+          if (count > 0 && fallbackStageId) {
+            await supabase.from('deals').update({ stage_id: fallbackStageId }).eq('stage_id', stage.id);
+            movedDealsCount += count;
+          }
+          const { error: delError } = await supabase.from('pipeline_stages').delete().eq('id', stage.id);
+          if (delError) { summary.push({ pipeline_id: targetId, error: `Borrando "${stage.name}": ${delError.message}` }); continue; }
+          removedNames.push(stage.name);
+        }
+      }
+    }
+
+    summary.push({ pipeline_id: targetId, added: addedNames, removed: removedNames, moved_deals: movedDealsCount });
   }
 
   res.json({ summary });
