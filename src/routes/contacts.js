@@ -39,7 +39,7 @@ router.get('/:id', async (req, res) => {
 
   const [{ data: contact, error }, { data: activities }, { data: deals }, { data: tasks }] =
     await Promise.all([
-      supabase.from('contacts').select('*, companies(*)').eq('id', id).single(),
+      supabase.from('contacts').select('*, companies(*), team_members!contacts_owner_id_fkey(full_name)').eq('id', id).single(),
       supabase
         .from('activities')
         .select('*, team_members(full_name)')

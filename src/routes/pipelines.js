@@ -136,6 +136,53 @@ router.patch('/:id/stages/reorder', requireRole('admin'), async (req, res) => {
   res.json({ reordered: true, count: ordered_ids.length });
 });
 
+// POST /api/pipelines/clone-stages  { source_pipeline_id, target_pipeline_ids: [...] }
+// Copia las etapas del pipeline de origen hacia los pipelines destino, SOLO agregando
+// las que falten por nombre (sin distinguir mayúsculas) — nunca borra ni renombra una
+// etapa existente, para no perder ni desordenar tratos que ya estén en otra etapa.
+router.post('/clone-stages', requireRole('admin'), async (req, res) => {
+  const { source_pipeline_id, target_pipeline_ids } = req.body;
+  if (!source_pipeline_id || !Array.isArray(target_pipeline_ids) || target_pipeline_ids.length === 0) {
+    return res.status(400).json({ error: 'Falta source_pipeline_id o target_pipeline_ids.' });
+  }
+
+  const { data: sourceStages, error: sourceError } = await supabase
+    .from('pipeline_stages')
+    .select('name, position')
+    .eq('pipeline_id', source_pipeline_id)
+    .order('position');
+  if (sourceError) return res.status(400).json({ error: sourceError.message });
+  if (sourceStages.length === 0) return res.status(400).json({ error: 'El pipeline de origen no tiene etapas.' });
+
+  const summary = [];
+
+  for (const targetId of target_pipeline_ids) {
+    if (targetId === source_pipeline_id) continue;
+
+    const { data: existing, error: existingError } = await supabase
+      .from('pipeline_stages')
+      .select('id, name, position')
+      .eq('pipeline_id', targetId);
+    if (existingError) { summary.push({ pipeline_id: targetId, error: existingError.message }); continue; }
+
+    const existingNames = new Set(existing.map((s) => s.name.toLowerCase().trim()));
+    const missing = sourceStages.filter((s) => !existingNames.has(s.name.toLowerCase().trim()));
+    let nextPosition = existing.length > 0 ? Math.max(...existing.map((s) => s.position)) + 1 : 0;
+
+    for (const stage of missing) {
+      const { error: insertError } = await supabase
+        .from('pipeline_stages')
+        .insert({ pipeline_id: targetId, name: stage.name, position: nextPosition });
+      if (insertError) { summary.push({ pipeline_id: targetId, error: insertError.message }); continue; }
+      nextPosition += 1;
+    }
+
+    summary.push({ pipeline_id: targetId, added: missing.map((s) => s.name) });
+  }
+
+  res.json({ summary });
+});
+
 // PATCH /api/pipelines/stages/:stageId — editar/reordenar etapa
 router.patch('/stages/:stageId', requireRole('admin'), async (req, res) => {
   const { stageId } = req.params;
