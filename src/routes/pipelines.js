@@ -112,6 +112,22 @@ router.post('/:id/stages', requireRole('admin'), async (req, res) => {
   res.status(201).json(data);
 });
 
+// PATCH /api/pipelines/:id/stages/reorder  { ordered_ids: [uuid, ...] }
+// Reordena TODAS las etapas de un pipeline de una sola vez y las renumera de forma
+// secuencial (0,1,2...) — de paso corrige cualquier hueco o choque de posición que
+// haya quedado de antes (ej. dos etapas con la misma posición).
+router.patch('/:id/stages/reorder', requireRole('admin'), async (req, res) => {
+  const { ordered_ids } = req.body;
+  if (!Array.isArray(ordered_ids) || ordered_ids.length === 0) {
+    return res.status(400).json({ error: 'ordered_ids debe ser un array de IDs.' });
+  }
+  for (let i = 0; i < ordered_ids.length; i++) {
+    const { error } = await supabase.from('pipeline_stages').update({ position: i }).eq('id', ordered_ids[i]).eq('pipeline_id', req.params.id);
+    if (error) return res.status(400).json({ error: `Falló en el ID ${ordered_ids[i]}: ${error.message}` });
+  }
+  res.json({ reordered: true, count: ordered_ids.length });
+});
+
 // PATCH /api/pipelines/stages/:stageId — editar/reordenar etapa
 router.patch('/stages/:stageId', requireRole('admin'), async (req, res) => {
   const { stageId } = req.params;
