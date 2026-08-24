@@ -10,7 +10,25 @@ router.use(requirePage('deals'));
 
 // GET /api/deals?pipeline_id=&owner_id=&status=&stage_id=&lost_reason=&created_month=YYYY-MM&closed_month=YYYY-MM
 router.get('/', async (req, res) => {
-  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month } = req.query;
+  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month, search, limit } = req.query;
+
+  // Búsqueda rápida (ej. buscador de tratos para reasignar una actividad) — no pagina todo,
+  // solo trae hasta "limit" resultados directo. Separado del loop de abajo, que sí está
+  // pensado para traer TODO un pipeline y no se lleva bien con .limit().
+  if (search || limit) {
+    let query = supabase
+      .from('deals')
+      .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position), pipelines(name)')
+      .order('updated_at', { ascending: false })
+      .limit(Number(limit) || 20);
+    if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
+    if (owner_id) query = query.eq('owner_id', owner_id);
+    if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
+    if (search) query = query.ilike('title', `%${search}%`);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+  }
 
   // El cliente de Supabase limita cada request a 1000 filas por defecto.
   // Si el pipeline tiene más deals que eso, hay que paginar con .range()

@@ -73,15 +73,19 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
   res.status(204).send();
 });
 
-// DELETE /api/pipelines/stages/:stageId — borra una etapa (falla si tiene deals, por integridad referencial)
+// DELETE /api/pipelines/stages/:stageId — borra una etapa (falla si tiene deals ACTUALMENTE en ella)
 router.delete('/stages/:stageId', requireRole('admin'), async (req, res) => {
-  const { error } = await supabase.from('pipeline_stages').delete().eq('id', req.params.stageId);
-  if (error) {
-    if (error.message.includes('foreign key') || error.code === '23503') {
-      return res.status(400).json({ error: 'No se puede borrar: hay deals en esta etapa. Muévelos primero.' });
-    }
-    return res.status(400).json({ error: error.message });
+  const { count } = await supabase.from('deals').select('*', { count: 'exact', head: true }).eq('stage_id', req.params.stageId);
+  if (count > 0) {
+    return res.status(400).json({ error: 'No se puede borrar: hay deals en esta etapa. Muévelos primero.' });
   }
+  // El historial de cambios de etapa referencia el ID aunque ya no haya deals ACTUALMENTE
+  // en la etapa — hay que limpiarlo o la restricción de llave foránea igual falla.
+  await supabase.from('deal_stage_history').delete().eq('from_stage_id', req.params.stageId);
+  await supabase.from('deal_stage_history').delete().eq('to_stage_id', req.params.stageId);
+
+  const { error } = await supabase.from('pipeline_stages').delete().eq('id', req.params.stageId);
+  if (error) return res.status(400).json({ error: error.message });
   res.status(204).send();
 });
 
@@ -206,6 +210,10 @@ router.post('/clone-stages', requireRole('admin'), async (req, res) => {
             await supabase.from('deals').update({ stage_id: fallbackStageId }).eq('stage_id', stage.id);
             movedDealsCount += count;
           }
+          // El historial de cambios de etapa (deal_stage_history) también referencia el ID de
+          // la etapa — hay que limpiarlo antes de borrar, o la restricción de llave foránea falla.
+          await supabase.from('deal_stage_history').delete().eq('from_stage_id', stage.id);
+          await supabase.from('deal_stage_history').delete().eq('to_stage_id', stage.id);
           const { error: delError } = await supabase.from('pipeline_stages').delete().eq('id', stage.id);
           if (delError) { summary.push({ pipeline_id: targetId, error: `Borrando "${stage.name}": ${delError.message}` }); continue; }
           removedNames.push(stage.name);
