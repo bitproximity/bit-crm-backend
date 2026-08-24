@@ -83,7 +83,7 @@ router.get('/:tagId/contacts', async (req, res) => {
   if (links.length === 0) return res.json([]);
 
   const { data: contacts, error } = await supabase
-    .from('contacts').select('*, companies(name)').in('id', links.map((l) => l.entity_id));
+    .from('contacts').select('*, companies(name), team_members!contacts_owner_id_fkey(full_name)').in('id', links.map((l) => l.entity_id));
   if (error) return res.status(500).json({ error: error.message });
   res.json(contacts);
 });
