@@ -91,7 +91,7 @@ async function deleteTaskFromCalendar(task) {
   }
 }
 
-const ACTIVITY_TYPE_ICON = { llamada: '📞', email: '✉️', reunion: '🤝', nota: '📝', whatsapp: '💬', tarea: '✅' };
+const ACTIVITY_TYPE_ICON = { llamada: '📞', email: '✉️', reunion: '🤝', nota: '📝', whatsapp: '💬', tarea: '✅', followup: '🔁' };
 
 // Crea, actualiza o borra el evento de Google Calendar de una actividad (llamada, reunión, etc.)
 // registrada en el detalle de un trato/contacto/empresa. Mismo criterio que syncTaskToCalendar:
