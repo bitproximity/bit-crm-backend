@@ -19,15 +19,20 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', requireRole('admin', 'ventas'), async (req, res) => {
-  const { data, error } = await supabase.from('products').insert(req.body).select().single();
+  // sku vacío ("") no es lo mismo que sin SKU para la restricción única de la tabla —
+  // dos productos con sku:"" chocan entre sí. Se normaliza a null.
+  const payload = { ...req.body, sku: req.body.sku?.trim() || null };
+  const { data, error } = await supabase.from('products').insert(payload).select().single();
   if (error) return res.status(400).json({ error: error.message });
   res.status(201).json(data);
 });
 
 router.patch('/:id', requireRole('admin', 'ventas'), async (req, res) => {
+  const payload = { ...req.body };
+  if ('sku' in payload) payload.sku = payload.sku?.trim() || null;
   const { data, error } = await supabase
     .from('products')
-    .update(req.body)
+    .update(payload)
     .eq('id', req.params.id)
     .select()
     .single();
