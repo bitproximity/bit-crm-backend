@@ -1,4 +1,11 @@
 require('dotenv').config();
+// Parchea Express para que un error lanzado (o una promesa rechazada) dentro de una
+// ruta async se reenvíe solo al manejador de errores de abajo. Sin esto, un error
+// inesperado en CUALQUIER ruta (no un error normal de negocio, sino algo imprevisto)
+// dejaba la petición colgada para siempre sin responder nada — ni éxito ni error —
+// y el navegador se quedaba cargando indefinidamente. Debe ir antes de requerir
+// cualquier router.
+require('express-async-errors');
 const express = require('express');
 const cors = require('cors');
 
@@ -80,8 +87,9 @@ app.post('/mcp', mcpAuth, async (req, res) => {
 
 // Manejo de errores no capturados
 app.use((err, req, res, next) => {
-  console.error('Error no manejado:', err);
-  res.status(500).json({ error: 'Error interno del servidor' });
+  console.error('Error no manejado en', req.method, req.originalUrl, ':', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err.message || 'Error interno del servidor' });
 });
 
 const PORT = process.env.PORT || 3000;
