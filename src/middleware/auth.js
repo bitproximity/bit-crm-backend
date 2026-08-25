@@ -86,15 +86,20 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Token inválido o expirado' });
     }
 
-    const { data: member, error: memberError } = await supabase
+    const { data: members, error: memberError } = await supabase
       .from('team_members')
       .select('*')
       .eq('auth_user_id', userData.user.id)
-      .single();
+      .order('created_at', { ascending: true });
 
-    if (memberError || !member) {
+    // .single() fallaba (y devolvía "sin perfil") tanto si no había fila como si por algún
+    // motivo había MÁS DE UNA con el mismo auth_user_id — un 403 intermitente y difícil de
+    // diagnosticar. Ahora se toleran duplicados: se usa la primera activa, o la primera que
+    // haya, en vez de romper con un solo caso ambiguo.
+    if (memberError || !members || members.length === 0) {
       return res.status(403).json({ error: 'Usuario sin perfil en el equipo' });
     }
+    const member = members.find((m) => m.active) || members[0];
 
     if (!member.active) {
       return res.status(403).json({ error: 'Usuario desactivado' });
