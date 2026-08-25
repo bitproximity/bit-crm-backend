@@ -9,6 +9,66 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePage('b2b'));
 
+// Convierte UN registro de Bit Prospect en Contacto + Empresa reales del CRM (creando o
+// reutilizando por nombre), y lo etiqueta en la lista "Bit Prospect <cliente>". Se usa tanto
+// desde el botón manual "Ver en Listas" como automáticamente cada vez que se crea/importa
+// un registro — así el equipo comercial ve esa gente en Contactos sin pasos extra.
+async function syncRecordToContact(record, clientName, ownerId) {
+  if (!record.target_company) return { skipped: true };
+
+  const listName = `Bit Prospect ${clientName}`;
+  const { data: existingTag } = await supabase.from('tags').select('id').ilike('name', listName).maybeSingle();
+  let tagId = existingTag?.id;
+  if (!tagId) {
+    const { data: newTag, error: tagError } = await supabase.from('tags').insert({ name: listName }).select('id').single();
+    if (tagError) return { skipped: true, error: tagError.message };
+    tagId = newTag.id;
+  }
+
+  let companyId;
+  const { data: existingCompany } = await supabase.from('companies').select('id').ilike('name', record.target_company).maybeSingle();
+  if (existingCompany) {
+    companyId = existingCompany.id;
+  } else {
+    const { data: newCompany, error: companyError } = await supabase
+      .from('companies').insert({ name: record.target_company, country: record.country || null, industry: record.industry || null }).select('id').single();
+    if (companyError) return { skipped: true, error: companyError.message };
+    companyId = newCompany.id;
+  }
+
+  const [firstName, ...rest] = (record.target_contact || record.target_company).trim().split(' ');
+  const { data: dupe } = await supabase
+    .from('contacts').select('id').eq('company_id', companyId).ilike('first_name', firstName).maybeSingle();
+
+  let contactId = dupe?.id;
+  if (!contactId) {
+    const { data: contact, error: contactError } = await supabase
+      .from('contacts')
+      .insert({
+        first_name: firstName || record.target_company,
+        last_name: rest.join(' ') || null,
+        position: record.target_position || null,
+        email: record.target_email || null,
+        phone: record.target_phone || null,
+        country: record.country || null,
+        company_id: companyId,
+        owner_id: ownerId,
+        source: 'bit_prospect',
+      })
+      .select('id')
+      .single();
+    if (contactError) return { skipped: true, error: contactError.message };
+    contactId = contact.id;
+  }
+
+  const { data: alreadyTagged } = await supabase
+    .from('taggables').select('tag_id').eq('tag_id', tagId).eq('entity_type', 'contact').eq('entity_id', contactId).maybeSingle();
+  if (!alreadyTagged) {
+    await supabase.from('taggables').insert({ tag_id: tagId, entity_type: 'contact', entity_id: contactId });
+  }
+  return { skipped: false, companyId, contactId };
+}
+
 // Personas que hacen prospección/reuniones para Bit Prospect (no todo el equipo del CRM
 // aplica — ej. soporte técnico no debe aparecer en "Rendimiento por persona").
 // Si el equipo de prospección cambia, actualiza esta lista.
@@ -82,6 +142,14 @@ router.get('/records', async (req, res) => {
 router.post('/records', async (req, res) => {
   const { data, error } = await supabase.from('b2b_records').insert({ ...req.body, created_by: req.teamMember.id }).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  // Sincroniza al toque con Contactos/Empresas — no hace falta ir a apretar "Ver en Listas"
+  // cada vez que se agrega un registro a mano.
+  if (data.client_company_id) {
+    const { data: client } = await supabase.from('companies').select('name').eq('id', data.client_company_id).maybeSingle();
+    if (client) await syncRecordToContact(data, client.name, req.teamMember.id);
+  }
+
   res.status(201).json(data);
 });
 
@@ -89,6 +157,12 @@ router.post('/records', async (req, res) => {
 router.patch('/records/:id', async (req, res) => {
   const { data, error } = await supabase.from('b2b_records').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  if (data.client_company_id) {
+    const { data: client } = await supabase.from('companies').select('name').eq('id', data.client_company_id).maybeSingle();
+    if (client) await syncRecordToContact(data, client.name, req.teamMember.id);
+  }
+
   res.json(data);
 });
 
@@ -138,6 +212,8 @@ router.post('/import', async (req, res) => {
   if (!client_company_id || !Array.isArray(records) || records.length === 0) {
     return res.status(400).json({ error: 'Falta client_company_id o records' });
   }
+
+  const { data: client } = await supabase.from('companies').select('name').eq('id', client_company_id).maybeSingle();
 
   let inserted = 0;
   let updated = 0;
@@ -205,6 +281,14 @@ router.post('/import', async (req, res) => {
     }
   }
 
+  // Sincroniza toda la tanda con Contactos/Empresas de una — antes había que apretar
+  // "Ver en Listas" a mano después de cada import.
+  if (client) {
+    for (const r of records) {
+      await syncRecordToContact(r, client.name, req.teamMember.id);
+    }
+  }
+
   res.json({ inserted, updated });
 });
 
@@ -268,66 +352,14 @@ router.post('/clients/:id/export-to-contacts', async (req, res) => {
     .from('b2b_records').select('*').eq('client_company_id', req.params.id);
   if (recordsError) return res.status(500).json({ error: recordsError.message });
 
-  const listName = `Bit Prospect ${client.name}`;
-  const { data: existingTag } = await supabase.from('tags').select('id').ilike('name', listName).maybeSingle();
-  let tagId = existingTag?.id;
-  if (!tagId) {
-    const { data: newTag, error: tagError } = await supabase.from('tags').insert({ name: listName }).select('id').single();
-    if (tagError) return res.status(400).json({ error: tagError.message });
-    tagId = newTag.id;
-  }
-
   let created = 0;
   let skipped = 0;
-
   for (const r of records) {
-    if (!r.target_company) { skipped++; continue; }
-
-    let companyId;
-    const { data: existingCompany } = await supabase.from('companies').select('id').ilike('name', r.target_company).maybeSingle();
-    if (existingCompany) {
-      companyId = existingCompany.id;
-    } else {
-      const { data: newCompany, error: companyError } = await supabase
-        .from('companies').insert({ name: r.target_company, country: r.country || null, industry: r.industry || null }).select('id').single();
-      if (companyError) { skipped++; continue; }
-      companyId = newCompany.id;
-    }
-
-    const [firstName, ...rest] = (r.target_contact || r.target_company).trim().split(' ');
-    const { data: dupe } = await supabase
-      .from('contacts').select('id').eq('company_id', companyId).ilike('first_name', firstName).maybeSingle();
-
-    let contactId = dupe?.id;
-    if (!contactId) {
-      const { data: contact, error: contactError } = await supabase
-        .from('contacts')
-        .insert({
-          first_name: firstName || r.target_company,
-          last_name: rest.join(' ') || null,
-          position: r.target_position || null,
-          email: r.target_email || null,
-          phone: r.target_phone || null,
-          country: r.country || null,
-          company_id: companyId,
-          owner_id: req.teamMember.id,
-          source: 'bit_prospect',
-        })
-        .select('id')
-        .single();
-      if (contactError) { skipped++; continue; }
-      contactId = contact.id;
-    }
-
-    const { data: alreadyTagged } = await supabase
-      .from('taggables').select('tag_id').eq('tag_id', tagId).eq('entity_type', 'contact').eq('entity_id', contactId).maybeSingle();
-    if (!alreadyTagged) {
-      await supabase.from('taggables').insert({ tag_id: tagId, entity_type: 'contact', entity_id: contactId });
-    }
-    created++;
+    const result = await syncRecordToContact(r, client.name, req.teamMember.id);
+    if (result.skipped) skipped++; else created++;
   }
 
-  res.json({ created, skipped, list_name: listName });
+  res.json({ created, skipped, list_name: `Bit Prospect ${client.name}` });
 });
 
 module.exports = router;
