@@ -108,39 +108,57 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
     const messages = list.messages || [];
     const saved = [];
+    const failedCount = { value: 0 };
 
     for (const m of messages) {
-      const { data: full } = await gmail.users.messages.get({
-        userId: 'me',
-        id: m.id,
-        format: 'metadata',
-        metadataHeaders: ['From', 'To', 'Subject', 'Date'],
-      });
+      try {
+        const { data: full } = await gmail.users.messages.get({
+          userId: 'me',
+          id: m.id,
+          format: 'metadata',
+          metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+        });
 
-      const headers = Object.fromEntries(
-        (full.payload.headers || []).map((h) => [h.name.toLowerCase(), h.value])
-      );
+        const headers = Object.fromEntries(
+          (full.payload?.headers || []).map((h) => [h.name.toLowerCase(), h.value])
+        );
 
-      const { data: row } = await supabase
-        .from('gmail_messages')
-        .upsert(
-          {
-            gmail_message_id: m.id,
-            team_member_id: req.teamMember.id,
-            entity_type,
-            entity_id,
-            from_email: headers.from,
-            to_emails: headers.to ? headers.to.split(',').map((s) => s.trim()) : [],
-            subject: headers.subject,
-            snippet: full.snippet,
-            sent_at: headers.date ? new Date(headers.date).toISOString() : null,
-          },
-          { onConflict: 'gmail_message_id' }
-        )
-        .select()
-        .single();
+        // Algunos correos traen la fecha en un formato que Date() no puede parsear —
+        // antes esto reventaba con "Invalid time value" y tumbaba TODA la sincronización
+        // (no solo ese mensaje), porque estaba fuera de cualquier manejo de errores.
+        let sentAt = null;
+        if (headers.date) {
+          const parsed = new Date(headers.date);
+          if (!isNaN(parsed.getTime())) sentAt = parsed.toISOString();
+        }
 
-      saved.push(row);
+        const { data: row, error: upsertError } = await supabase
+          .from('gmail_messages')
+          .upsert(
+            {
+              gmail_message_id: m.id,
+              team_member_id: req.teamMember.id,
+              entity_type,
+              entity_id,
+              from_email: headers.from,
+              to_emails: headers.to ? headers.to.split(',').map((s) => s.trim()) : [],
+              subject: headers.subject,
+              snippet: full.snippet,
+              sent_at: sentAt,
+            },
+            { onConflict: 'gmail_message_id' }
+          )
+          .select()
+          .single();
+
+        if (upsertError) { failedCount.value++; continue; }
+        saved.push(row);
+      } catch (msgErr) {
+        // Un mensaje individual que falle (borrado en Gmail, formato inesperado, etc.)
+        // no debe tumbar el resto de la sincronización.
+        console.error('Error sincronizando un mensaje puntual:', m.id, msgErr.message);
+        failedCount.value++;
+      }
     }
 
     res.json(saved);
