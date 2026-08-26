@@ -11,6 +11,21 @@ router.get('/', async (req, res) => {
   res.json(data);
 });
 
+// POST /api/exchange-rates  { currency, rate_to_usd }  — solo admin, crea o actualiza
+router.post('/', requireRole('admin'), async (req, res) => {
+  const { currency, rate_to_usd } = req.body;
+  if (!currency || rate_to_usd === undefined) return res.status(400).json({ error: 'Falta currency o rate_to_usd' });
+
+  const { data, error } = await supabase
+    .from('exchange_rates')
+    .upsert({ currency, rate_to_usd, updated_at: new Date().toISOString() }, { onConflict: 'currency' })
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
 // PATCH /api/exchange-rates/:currency  { rate_to_usd }  — solo admin, actualización manual
 router.patch('/:currency', requireRole('admin'), async (req, res) => {
   const { currency } = req.params;
