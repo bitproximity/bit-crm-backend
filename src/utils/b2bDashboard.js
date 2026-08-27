@@ -13,6 +13,7 @@ function computeB2bDashboard(records, teamMembers = []) {
   const conversionRate = totalContacted ? Math.round((totalMeetings / totalContacted) * 100) : 0;
 
   const byIndustry = {};
+  const byPosition = {}; // reuniones agrupadas por cargo del contacto (target_position)
   const byCountry = {}; // key: país normalizado (sin mayúsculas/tildes) -> { label, count }
   const byCity = {}; // misma idea que byCountry, para no duplicar "Bogotá" / "bogota" / "BOGOTA"
   const byMonthScheduled = {};
@@ -34,6 +35,9 @@ function computeB2bDashboard(records, teamMembers = []) {
   meetings.forEach((r) => {
     const industry = r.industry || 'Sin especificar';
     byIndustry[industry] = (byIndustry[industry] || 0) + 1;
+
+    const position = r.target_position?.trim() || 'Sin especificar';
+    byPosition[position] = (byPosition[position] || 0) + 1;
 
     const countryLabel = r.country?.trim() || 'Sin especificar';
     const countryKey = r.country ? normalizeCountry(r.country) : 'sin especificar';
@@ -78,6 +82,7 @@ function computeB2bDashboard(records, teamMembers = []) {
     conversion_rate: conversionRate,
     meetings_this_month: byMonth[thisMonthKey] || 0,
     by_industry: Object.entries(byIndustry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+    by_position: Object.entries(byPosition).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_country: Object.values(byCountry).map(({ label, count }) => ({ name: label, count })).sort((a, b) => b.count - a.count),
     by_city: Object.values(byCity).map(({ label, count }) => ({ name: label, count })).sort((a, b) => b.count - a.count),
     by_month: Object.entries(byMonth).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),

@@ -18,7 +18,7 @@ router.get('/:token', async (req, res) => {
 
   const { data: records } = await supabase
     .from('b2b_records')
-    .select('target_company, target_contact, industry, country, city, meeting_date, status')
+    .select('target_company, target_contact, target_position, industry, country, city, meeting_date, status')
     .eq('client_company_id', company.id);
 
   res.json({
