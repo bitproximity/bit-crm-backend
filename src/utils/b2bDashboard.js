@@ -72,20 +72,14 @@ function computeB2bDashboard(records, teamMembers = []) {
   const realized = records.filter((r) => r.realized_date || r.status === 'reunion_realizada');
   const conversionRate = totalContacted ? Math.round((totalMeetings / totalContacted) * 100) : 0;
 
-  // Reuniones de reactivación — mismas dos fechas (programada/realizada) que una reunión
-  // normal, pero se miden aparte para saber cuánto se está reactivando cuentas frías.
-  const reactivations = records.filter((r) => r.status === 'reunion_reactivacion');
-  const reactivationScheduled = reactivations.filter((r) => r.meeting_date);
-  const reactivationRealized = reactivations.filter((r) => r.realized_date);
-  const byMonthReactivationScheduled = {};
-  const byMonthReactivationRealized = {};
-  reactivationScheduled.forEach((r) => {
-    const month = r.meeting_date.slice(0, 7);
-    byMonthReactivationScheduled[month] = (byMonthReactivationScheduled[month] || 0) + 1;
-  });
-  reactivationRealized.forEach((r) => {
-    const month = r.realized_date.slice(0, 7);
-    byMonthReactivationRealized[month] = (byMonthReactivationRealized[month] || 0) + 1;
+  // Reactivación: un solo campo de fecha ("Fecha reactivada"), independiente de si el
+  // registro también tiene fecha programada/realizada normal — un registro puede tener
+  // las tres a la vez (ej. una cuenta fría que se retomó y ahora sí agendó).
+  const reactivated = records.filter((r) => r.reactivated_date);
+  const byMonthReactivated = {};
+  reactivated.forEach((r) => {
+    const month = r.reactivated_date.slice(0, 7);
+    byMonthReactivated[month] = (byMonthReactivated[month] || 0) + 1;
   });
 
   const byIndustry = {};
@@ -151,9 +145,7 @@ function computeB2bDashboard(records, teamMembers = []) {
     total_meetings: totalMeetings,
     total_scheduled: scheduled.length,
     total_realized: realized.length,
-    total_reactivations: reactivations.length,
-    total_reactivations_scheduled: reactivationScheduled.length,
-    total_reactivations_realized: reactivationRealized.length,
+    total_reactivations: reactivated.length,
     conversion_rate: conversionRate,
     meetings_this_month: byMonth[thisMonthKey] || 0,
     by_industry: Object.entries(byIndustry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
@@ -164,8 +156,7 @@ function computeB2bDashboard(records, teamMembers = []) {
     by_month: Object.entries(byMonth).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_month_scheduled: Object.entries(byMonthScheduled).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_month_realized: Object.entries(byMonthRealized).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
-    by_month_reactivations_scheduled: Object.entries(byMonthReactivationScheduled).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
-    by_month_reactivations_realized: Object.entries(byMonthReactivationRealized).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
+    by_month_reactivations: Object.entries(byMonthReactivated).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_person: Object.values(byPerson)
       .map((p) => ({ ...p, conversion: p.contacted ? Math.round((p.meetings / p.contacted) * 100) : 0 }))
       .sort((a, b) => b.meetings - a.meetings),
