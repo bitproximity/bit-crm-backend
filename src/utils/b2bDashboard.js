@@ -22,25 +22,26 @@ function levenshtein(a, b) {
   return prev[n];
 }
 
-function normalizePosition(p) {
-  return (p || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+function normalizeText(t) {
+  return (t || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
 }
 
-// Agrupa cargos "parecidos" en una sola categoría — cubre mayúsculas/tildes (por la
-// normalización) y errores de tipeo reales (por la distancia de edición), sin necesitar
-// que el usuario escriba el cargo exactamente igual cada vez. El umbral de similitud
-// escala con el largo del texto: 1 letra distinta cada ~6 caracteres, tope de 3.
-function groupSimilarPositions(records) {
-  const clusters = []; // [{ normalized, label, count }]
-  records.forEach((r) => {
-    const raw = r.target_position?.trim();
+// Agrupa valores de texto "parecidos" en una sola categoría — cubre mayúsculas/tildes
+// (por la normalización) y errores de tipeo reales (por la distancia de edición), sin
+// necesitar que el usuario escriba el mismo texto exactamente igual cada vez. El umbral
+// de similitud escala con el largo del texto: 1 letra distinta cada ~6 caracteres, tope 3.
+// Se usa tanto para "Cargo" como para "Comercial".
+function groupSimilarText(items) {
+  const clusters = []; // [{ normalized, label, count, variants }]
+  items.forEach((raw) => {
+    raw = raw?.trim();
     if (!raw) {
       const existing = clusters.find((c) => c.normalized === '');
       if (existing) existing.count += 1;
       else clusters.push({ normalized: '', label: 'Sin especificar', count: 1 });
       return;
     }
-    const norm = normalizePosition(raw);
+    const norm = normalizeText(raw);
     let match = clusters.find((c) => c.normalized === norm);
     if (!match) {
       const threshold = Math.min(3, Math.max(1, Math.floor(norm.length / 6)));
@@ -63,13 +64,29 @@ function groupSimilarPositions(records) {
 
 function computeB2bDashboard(records, teamMembers = []) {
   const totalContacted = records.length;
-  const meetings = records.filter((r) => r.meeting_date || r.realized_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada');
+  const meetings = records.filter((r) => r.meeting_date || r.realized_date || r.status === 'reunion_agendada' || r.status === 'reunion_realizada' || r.status === 'reunion_reactivacion');
   const totalMeetings = meetings.length;
   // Programadas: tienen fecha programada. Realizadas: tienen fecha realizada (o el estado lo dice
   // aunque el archivo original no haya traído fecha exacta, ej. "Marcar todo como realizada").
   const scheduled = records.filter((r) => r.meeting_date);
   const realized = records.filter((r) => r.realized_date || r.status === 'reunion_realizada');
   const conversionRate = totalContacted ? Math.round((totalMeetings / totalContacted) * 100) : 0;
+
+  // Reuniones de reactivación — mismas dos fechas (programada/realizada) que una reunión
+  // normal, pero se miden aparte para saber cuánto se está reactivando cuentas frías.
+  const reactivations = records.filter((r) => r.status === 'reunion_reactivacion');
+  const reactivationScheduled = reactivations.filter((r) => r.meeting_date);
+  const reactivationRealized = reactivations.filter((r) => r.realized_date);
+  const byMonthReactivationScheduled = {};
+  const byMonthReactivationRealized = {};
+  reactivationScheduled.forEach((r) => {
+    const month = r.meeting_date.slice(0, 7);
+    byMonthReactivationScheduled[month] = (byMonthReactivationScheduled[month] || 0) + 1;
+  });
+  reactivationRealized.forEach((r) => {
+    const month = r.realized_date.slice(0, 7);
+    byMonthReactivationRealized[month] = (byMonthReactivationRealized[month] || 0) + 1;
+  });
 
   const byIndustry = {};
   const byCountry = {}; // key: país normalizado (sin mayúsculas/tildes) -> { label, count }
@@ -134,15 +151,21 @@ function computeB2bDashboard(records, teamMembers = []) {
     total_meetings: totalMeetings,
     total_scheduled: scheduled.length,
     total_realized: realized.length,
+    total_reactivations: reactivations.length,
+    total_reactivations_scheduled: reactivationScheduled.length,
+    total_reactivations_realized: reactivationRealized.length,
     conversion_rate: conversionRate,
     meetings_this_month: byMonth[thisMonthKey] || 0,
     by_industry: Object.entries(byIndustry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-    by_position: groupSimilarPositions(meetings),
+    by_position: groupSimilarText(meetings.map((r) => r.target_position)),
+    by_commercial: groupSimilarText(meetings.map((r) => r.commercial)),
     by_country: Object.values(byCountry).map(({ label, count }) => ({ name: label, count })).sort((a, b) => b.count - a.count),
     by_city: Object.values(byCity).map(({ label, count }) => ({ name: label, count })).sort((a, b) => b.count - a.count),
     by_month: Object.entries(byMonth).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_month_scheduled: Object.entries(byMonthScheduled).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_month_realized: Object.entries(byMonthRealized).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
+    by_month_reactivations_scheduled: Object.entries(byMonthReactivationScheduled).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
+    by_month_reactivations_realized: Object.entries(byMonthReactivationRealized).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)),
     by_person: Object.values(byPerson)
       .map((p) => ({ ...p, conversion: p.contacted ? Math.round((p.meetings / p.contacted) * 100) : 0 }))
       .sort((a, b) => b.meetings - a.meetings),
