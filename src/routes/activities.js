@@ -2,6 +2,9 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { syncActivityToCalendar, getCalendarClientForUser } = require('../utils/googleCalendarSync');
+const { sendEmail } = require('../utils/email');
+
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -76,7 +79,47 @@ router.post('/', async (req, res) => {
   // Fire-and-forget: si falla el calendario, la actividad ya quedó guardada de todas formas.
   const calendarResult = await syncActivityToCalendar(data);
   res.status(201).json({ ...data, calendar_sync: calendarResult });
+
+  // Notificación por correo a quien fue mencionado con @Nombre en una nota — no bloquea
+  // la respuesta. Mismo patrón que las menciones en comentarios de tareas.
+  if (data.type === 'nota' && data.summary) {
+    notifyMentions(data.summary, req.teamMember, data);
+  }
 });
+
+async function notifyMentions(body, author, activity) {
+  const { data: team } = await supabase.from('team_members').select('id, full_name, email').eq('active', true);
+  const mentioned = (team || []).filter(
+    (m) => m.id !== author.id && body.toLowerCase().includes(`@${m.full_name.toLowerCase()}`)
+  );
+  if (mentioned.length === 0) return;
+
+  let entityLabel = '';
+  let entityUrl = `${PUBLIC_APP_URL}/`;
+  if (activity.entity_type === 'deal') {
+    const { data: deal } = await supabase.from('deals').select('title').eq('id', activity.entity_id).maybeSingle();
+    entityLabel = deal?.title ? `el trato "${deal.title}"` : 'un trato';
+    entityUrl = `${PUBLIC_APP_URL}/deals/${activity.entity_id}`;
+  } else if (activity.entity_type === 'contact') {
+    entityLabel = 'un contacto';
+  } else if (activity.entity_type === 'company') {
+    entityLabel = 'una empresa';
+  }
+
+  for (const member of mentioned) {
+    sendEmail({
+      to: member.email,
+      subject: `${author.full_name} te mencionó en ${entityLabel}`,
+      html: `
+        <div style="font-family: sans-serif; color: #1a1a2e; max-width: 480px;">
+          <p><strong>${author.full_name}</strong> te mencionó en una nota de ${entityLabel}:</p>
+          <div style="background:#f4f4f8; border-radius:8px; padding:12px 16px; margin: 12px 0;">${body}</div>
+          <a href="${entityUrl}" style="color:#8500FF;">Ver en Bit CRM →</a>
+        </div>
+      `,
+    }).catch(() => {});
+  }
+}
 
 // PATCH /api/activities/:id  { done?, title?, due_date?, summary? }
 router.patch('/:id', async (req, res) => {
