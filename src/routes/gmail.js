@@ -56,11 +56,17 @@ router.use(requireAuth);
 
 // GET /api/gmail/status
 router.get('/status', async (req, res) => {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('gmail_connections')
-    .select('email, connected_at')
+    .select('email')
     .eq('team_member_id', req.teamMember.id)
     .maybeSingle();
+
+  // "connected_at" nunca existió como columna real (nunca se creó por migración ni se
+  // guardaba al conectar) — pedirla acá hacía fallar la consulta en silencio, y por eso
+  // esto SIEMPRE devolvía "no conectado" aunque sí lo estuvieras. Ahora se revisa el
+  // error explícitamente en vez de ignorarlo.
+  if (error) return res.status(500).json({ error: error.message });
 
   res.json({ connected: !!data, email: data?.email || null });
 });

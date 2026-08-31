@@ -17,11 +17,15 @@ function calHeaders(apiKey) {
 
 // GET /api/calcom/status
 router.get('/status', async (req, res) => {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('calcom_connections')
-    .select('connected_at')
+    .select('id')
     .eq('team_member_id', req.teamMember.id)
     .maybeSingle();
+
+  // Mismo bug que en Gmail: "connected_at" nunca existió como columna real, así que
+  // esta consulta fallaba en silencio y siempre reportaba "no conectado".
+  if (error) return res.status(500).json({ error: error.message });
 
   res.json({ connected: !!data });
 });
