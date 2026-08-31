@@ -245,6 +245,7 @@ router.post('/import', async (req, res) => {
           target_email: r.target_email || undefined,
           target_phone: r.target_phone || undefined,
           executive: r.executive || undefined,
+          commercial: r.commercial || undefined,
           city: r.city || undefined,
           notes: r.notes || undefined,
           updated_at: new Date().toISOString(),
@@ -255,7 +256,7 @@ router.post('/import', async (req, res) => {
           client_company_id, target_company: r.target_company, target_contact: r.target_contact || null,
           industry: r.industry || null, country: r.country || null, city: r.city || null,
           target_position: r.target_position || null, target_email: r.target_email || null,
-          target_phone: r.target_phone || null, executive: r.executive || null,
+          target_phone: r.target_phone || null, executive: r.executive || null, commercial: r.commercial || null,
           meeting_date: r.meeting_date || null, realized_date: r.realized_date || null, status: statusFor(r), notes: r.notes || null,
           created_by: req.teamMember.id,
         });
@@ -271,7 +272,7 @@ router.post('/import', async (req, res) => {
       client_company_id, target_company: r.target_company, target_contact: r.target_contact || null,
       industry: r.industry || null, country: r.country || null, city: r.city || null,
       target_position: r.target_position || null, target_email: r.target_email || null,
-      target_phone: r.target_phone || null, executive: r.executive || null,
+      target_phone: r.target_phone || null, executive: r.executive || null, commercial: r.commercial || null,
       contacted_at: r.contacted_at || null, status: 'contactado', notes: r.notes || null,
       created_by: req.teamMember.id,
     }));
