@@ -137,7 +137,7 @@ router.get('/feed', async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  const byType = { contact: [], company: [], deal: [], task: [], project: [] };
+  const byType = { contact: [], company: [], deal: [], task: [], project: [], b2b_record: [] };
   rows.forEach((r) => byType[r.entity_type]?.push(r.entity_id));
 
   const labelTables = {
@@ -146,6 +146,8 @@ router.get('/feed', async (req, res) => {
     deal: { table: 'deals', label: (r) => r.title },
     task: { table: 'tasks', label: (r) => r.title },
     project: { table: 'projects', label: (r) => r.name },
+    // Registros de Bit Prospect — antes no dejaban rastro en el feed de actividad.
+    b2b_record: { table: 'b2b_records', label: (r) => r.target_company },
   };
 
   const labelMaps = {};

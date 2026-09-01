@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
+const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -143,6 +144,10 @@ router.post('/records', async (req, res) => {
   const { data, error } = await supabase.from('b2b_records').insert({ ...req.body, created_by: req.teamMember.id }).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
+  // Se registra en audit_log — antes Bit Prospect nunca dejaba rastro en "Actividad reciente"
+  // pese a ser donde el equipo outbound (Sofía, Mariana, Martina...) realmente trabaja a diario.
+  await logAudit('b2b_record', data.id, 'created', req.teamMember.id);
+
   // Sincroniza al toque con Contactos/Empresas — no hace falta ir a apretar "Ver en Listas"
   // cada vez que se agrega un registro a mano.
   if (data.client_company_id) {
@@ -158,6 +163,8 @@ router.patch('/records/:id', async (req, res) => {
   const { data, error } = await supabase.from('b2b_records').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
+  await logAudit('b2b_record', data.id, 'updated', req.teamMember.id, { fields: Object.keys(req.body) });
+
   if (data.client_company_id) {
     const { data: client } = await supabase.from('companies').select('name').eq('id', data.client_company_id).maybeSingle();
     if (client) await syncRecordToContact(data, client.name, req.teamMember.id);
@@ -169,6 +176,7 @@ router.patch('/records/:id', async (req, res) => {
 router.delete('/records/:id', async (req, res) => {
   const { error } = await supabase.from('b2b_records').delete().eq('id', req.params.id);
   if (error) return res.status(400).json({ error: error.message });
+  await logAudit('b2b_record', req.params.id, 'deleted', req.teamMember.id);
   res.status(204).send();
 });
 
@@ -290,6 +298,10 @@ router.post('/import', async (req, res) => {
       await syncRecordToContact(r, client.name, req.teamMember.id);
     }
   }
+
+  // Un solo registro de auditoría por import (no uno por fila, para no inundar el feed) —
+  // antes cargar una base entera a Bit Prospect no dejaba ningún rastro en "Actividad reciente".
+  await logAudit('company', client_company_id, 'imported', req.teamMember.id, { inserted, updated, mode });
 
   res.json({ inserted, updated });
 });
