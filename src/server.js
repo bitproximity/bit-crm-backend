@@ -34,6 +34,16 @@ app.use(
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// El CRM es datos en vivo — nunca debería quedar una respuesta vieja guardada en el
+// camino (navegador, o un proxy/CDN como Cloudflare delante de Railway). Esta cabecera
+// es la señal "oficial" HTTP que cualquiera de esas capas debe respetar para no
+// reusar una respuesta anterior, a diferencia de "cache: no-store" del lado del
+// navegador, que solo controla el caché del propio navegador.
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  next();
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api/team', require('./routes/team'));
