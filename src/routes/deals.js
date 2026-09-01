@@ -376,6 +376,18 @@ router.post('/import', async (req, res) => {
       ? contactMap.get(`${d.contact_name.split(' ')[0].toLowerCase().trim()}|${company_id || 'none'}`) || null
       : null;
 
+    // FIX: antes esto no existía y TODO trato importado quedaba con el status default
+    // de la tabla ('abierto'), sin importar si en Pipedrive ya estaba ganado o perdido.
+    // Eso inflaba "Deals abiertos"/"Pipeline abierto" con tratos que ya estaban cerrados,
+    // y "Ganados este mes"/"Últimos ganados" nunca los veía porque status != 'ganado'.
+    const status = ['abierto', 'ganado', 'perdido'].includes(d.status) ? d.status : 'abierto';
+    const closedAt =
+      status === 'ganado' || status === 'perdido'
+        ? d.closed_at && !isNaN(Date.parse(d.closed_at))
+          ? new Date(d.closed_at).toISOString()
+          : new Date().toISOString() // Pipedrive no trajo fecha de cierre parseable: usamos la fecha de import como mejor aproximación
+        : null;
+
     dealsToInsert.push({
       title: d.title,
       value: Number(d.value) || 0,
@@ -386,6 +398,9 @@ router.post('/import', async (req, res) => {
       contact_id,
       company_id,
       owner_id: req.teamMember.id,
+      status,
+      closed_at: closedAt,
+      lost_reason: status === 'perdido' ? d.lost_reason || null : null,
     });
   });
 
