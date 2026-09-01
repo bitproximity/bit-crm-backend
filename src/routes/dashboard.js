@@ -1,11 +1,13 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
-const { requirePage } = require('../middleware/pagePermissions');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+// El Dashboard es la pantalla principal para TODO el equipo, no solo admins — solo muestra
+// totales agregados (nada sensible por trato individual), así que no debería estar
+// restringido. Antes tenía requirePage('__admin_only__'), que bloqueaba con 403 a
+// cualquiera que no fuera admin, incluyendo roles 'operaciones' y 'outbound'.
 
 // GET /api/dashboard — resumen para la vista principal
 router.get('/', async (req, res) => {
