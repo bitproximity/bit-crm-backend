@@ -175,6 +175,11 @@ router.get('/dashboard', async (req, res) => {
 
   const { data: pipelines } = await supabase.from('pipelines').select('id, name');
   const pipelineNameById = Object.fromEntries((pipelines || []).map((p) => [p.id, p.name]));
+  // Si hay un pipeline_id filtrado, la lista de pipelines que se le devuelve al frontend
+  // (para la leyenda de colores del gráfico) debe reflejar solo ese filtro — antes siempre
+  // devolvía los 12 pipelines completos aunque el gráfico solo tuviera datos de uno, lo que
+  // hacía que la leyenda mostrara 12 colores sin sentido cuando ya se había filtrado a 1.
+  const visiblePipelines = pipeline_id ? (pipelines || []).filter((p) => p.id === pipeline_id) : pipelines || [];
 
   let dealsQuery = supabase
     .from('deals')
@@ -207,27 +212,37 @@ router.get('/dashboard', async (req, res) => {
     label: monthLabel(m),
     total: Object.values(createdByMonth[m]).reduce((a, b) => a + b, 0),
     by_pipeline: createdByMonth[m],
+    is_current_month: m === monthKey(new Date().toISOString()),
   }));
 
   // ── Deal duration: promedio de días entre creación y cierre (ganado/perdido) ──
   const closedDeals = (deals || []).filter((d) => d.status !== 'abierto' && d.closed_at);
-  const avgDurationDays = closedDeals.length
-    ? Math.round(
-        (closedDeals.reduce((sum, d) => sum + (new Date(d.closed_at) - new Date(d.created_at)), 0) /
-          closedDeals.length) /
-          86400000
-      )
-    : 0;
+  const avgDays = (arr) =>
+    arr.length
+      ? Math.round((arr.reduce((sum, d) => sum + (new Date(d.closed_at) - new Date(d.created_at)), 0) / arr.length) / 86400000)
+      : 0;
+  const avgDurationDays = avgDays(closedDeals);
+  // Se agrega el desglose ganados vs. perdidos: saber si los tratos perdidos tardan más o
+  // menos en cerrarse que los ganados es un dato accionable (¿se está tardando demasiado en
+  // descartar tratos que no van a avanzar?), y antes solo existía el promedio combinado.
+  const avgDurationDaysWon = avgDays(closedDeals.filter((d) => d.status === 'ganado'));
+  const avgDurationDaysLost = avgDays(closedDeals.filter((d) => d.status === 'perdido'));
 
   // ── Deals lost by reasons ──
+  // FIX: antes agrupaba por el texto exacto del motivo, así que "No tiene presupuesto",
+  // "no tiene presupuesto" y "no tienen presupuesto" contaban como 3 motivos distintos en
+  // vez de uno solo — fragmentaba el gráfico de torta sin necesidad. Se normaliza espacios/
+  // mayúsculas para agrupar, pero se muestra con la primera letra en mayúscula.
   const lostDeals = (deals || []).filter((d) => d.status === 'perdido');
   const reasonMap = {};
   lostDeals.forEach((d) => {
-    const reason = d.lost_reason?.trim() || '(sin motivo)';
-    reasonMap[reason] = (reasonMap[reason] || 0) + 1;
+    const raw = d.lost_reason?.trim().replace(/\s+/g, ' ') || '(sin motivo)';
+    const key = raw.toLowerCase();
+    if (!reasonMap[key]) reasonMap[key] = { label: raw.charAt(0).toUpperCase() + raw.slice(1), count: 0 };
+    reasonMap[key].count += 1;
   });
-  const deals_lost_by_reason = Object.entries(reasonMap)
-    .map(([reason, count]) => ({ reason, count, pct: lostDeals.length ? Math.round((count / lostDeals.length) * 100) : 0 }))
+  const deals_lost_by_reason = Object.values(reasonMap)
+    .map(({ label, count }) => ({ reason: label, count, pct: lostDeals.length ? Math.round((count / lostDeals.length) * 100) : 0 }))
     .sort((a, b) => b.count - a.count);
 
   // ── Average value of won deals: este año vs año anterior ──
@@ -245,13 +260,15 @@ router.get('/dashboard', async (req, res) => {
     const key = monthKey(d.closed_at);
     if (wonByMonth[key] !== undefined) wonByMonth[key] += Number(d.value || 0);
   });
-  const deals_won_by_month = months.map((m) => ({ month: m, label: monthLabel(m), value: wonByMonth[m] }));
+  const deals_won_by_month = months.map((m) => ({ month: m, label: monthLabel(m), value: wonByMonth[m], is_current_month: m === monthKey(new Date().toISOString()) }));
 
   res.json({
     year,
-    pipelines: pipelines || [],
+    pipelines: visiblePipelines,
     deals_by_month,
     deal_duration_avg_days: avgDurationDays,
+    deal_duration_avg_days_won: avgDurationDaysWon,
+    deal_duration_avg_days_lost: avgDurationDaysLost,
     deals_lost_by_reason,
     lost_total: lostDeals.length,
     won_avg_value: { current: Math.round(avgThisYear), previous: Math.round(avgPrevYear), pct_change: pctChange, count: wonThisYear.length },
