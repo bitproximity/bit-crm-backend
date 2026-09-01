@@ -14,20 +14,30 @@ router.get('/', async (req, res) => {
     { data: tasksByStatus },
     { data: projects },
     { data: wonLost },
+    { data: rates },
   ] = await Promise.all([
     supabase.from('deals').select('stage_id, value, currency, pipeline_stages(name)').eq('status', 'abierto'),
     supabase.from('tasks').select('status'),
     supabase.from('projects').select('id, name, status'),
     supabase.from('deals').select('status').in('status', ['ganado', 'perdido']),
+    supabase.from('exchange_rates').select('*'),
   ]);
 
+  const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
+  const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
+
   // Deals por etapa
+  // FIX: sumaba d.value crudo de distintas monedas (USD, COP, MXN, PYG...) sin convertir —
+  // un trato en COP o PYG tiene un valor nominal miles de veces más grande que el mismo
+  // monto en USD, así que una sola etapa con unos pocos tratos en otra moneda inflaba su
+  // total muy por encima de las demás etapas (mismo bug ya arreglado antes en Pipeline y
+  // Empresa, pero que se había quedado sin corregir acá).
   const stageMap = {};
   (dealsByStage || []).forEach((d) => {
     const name = d.pipeline_stages?.name || 'Sin etapa';
     stageMap[name] = stageMap[name] || { stage: name, count: 0, value: 0 };
     stageMap[name].count += 1;
-    stageMap[name].value += Number(d.value || 0);
+    stageMap[name].value += toUsd(d.value, d.currency);
   });
 
   // Tareas por estado
@@ -67,7 +77,7 @@ router.get('/', async (req, res) => {
   const winRate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : null;
 
   res.json({
-    deals_by_stage: Object.values(stageMap),
+    deals_by_stage: Object.values(stageMap).map((s) => ({ ...s, value: Math.round(s.value) })),
     tasks_by_status: taskMap,
     project_progress: progress,
     win_rate_pct: winRate,
