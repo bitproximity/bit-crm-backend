@@ -177,6 +177,35 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
   res.status(204).send();
 });
 
+// DELETE /api/team/:id/permanent — borra el perfil y la cuenta de Auth para siempre.
+// Solo se puede borrar a alguien que YA está desactivado (dar de baja primero es el
+// paso de seguridad — evita borrar por error a alguien con acceso activo).
+// Los tratos/tareas/documentos/registros que haya creado NO se borran ni se
+// reasignan: las columnas que lo referencian (owner_id, created_by, actor_id del
+// audit_log, etc.) están definidas "on delete set null", así que ese trabajo se queda
+// intacto pero deja de estar atribuido a nadie — el historial de "quién hizo qué"
+// pierde el nombre en las acciones de esta persona.
+router.delete('/:id/permanent', requireRole('admin'), async (req, res) => {
+  const { id } = req.params;
+  const { data: member } = await supabase.from('team_members').select('active, auth_user_id, full_name').eq('id', id).single();
+  if (!member) return res.status(404).json({ error: 'Miembro no encontrado' });
+  if (member.active) return res.status(400).json({ error: 'Primero hay que quitarle el acceso antes de eliminarlo definitivamente.' });
+
+  if (member.auth_user_id) {
+    const { error: authError } = await supabase.auth.admin.deleteUser(member.auth_user_id);
+    // Si la cuenta de Auth ya no existe (borrada por otra vía), seguimos igual con el
+    // perfil — no tiene sentido bloquear el borrado por eso.
+    if (authError && !/not.*found/i.test(authError.message || '')) {
+      return res.status(400).json({ error: `No se pudo borrar la cuenta de acceso: ${authError.message}` });
+    }
+  }
+
+  const { error } = await supabase.from('team_members').delete().eq('id', id);
+  if (error) return res.status(400).json({ error: error.message });
+
+  res.status(204).send();
+});
+
 // GET /api/team/me — perfil del usuario autenticado
 router.get('/me', async (req, res) => {
   res.json(req.teamMember);

@@ -185,12 +185,20 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, status, created_at, closed_at, lost_reason');
+    .select('id, value, currency, pipeline_id, company_id, status, created_at, closed_at, lost_reason, companies(country)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
-  const { data: deals, error } = await dealsQuery;
+  const [{ data: deals, error }, { data: rates }] = await Promise.all([dealsQuery, supabase.from('exchange_rates').select('*')]);
 
   if (error) return res.status(500).json({ error: error.message });
+
+  // FIX critico de moneda: las 3 secciones de abajo (tratos por mes, valor promedio de
+  // ganados, ganados en el tiempo) sumaban d.value crudo de distintas monedas (USD, COP,
+  // MXN, PYG...) sin convertir — mismo bug ya arreglado antes en Pipeline por etapa/Empresa,
+  // pero acá nunca se había tocado. Un solo trato grande en COP o PYG podía inflar un mes
+  // o el promedio muy por encima de la realidad.
+  const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
+  const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
 
   const monthKey = (iso) => iso.slice(0, 7); // YYYY-MM
   const monthLabel = (key) => {
@@ -207,13 +215,13 @@ router.get('/dashboard', async (req, res) => {
     const key = monthKey(d.created_at);
     if (!createdByMonth[key]) return;
     const pName = pipelineNameById[d.pipeline_id] || 'Sin pipeline';
-    createdByMonth[key][pName] = (createdByMonth[key][pName] || 0) + Number(d.value || 0);
+    createdByMonth[key][pName] = (createdByMonth[key][pName] || 0) + toUsd(d.value, d.currency);
   });
   const deals_by_month = months.map((m) => ({
     month: m,
     label: monthLabel(m),
-    total: Object.values(createdByMonth[m]).reduce((a, b) => a + b, 0),
-    by_pipeline: createdByMonth[m],
+    total: Math.round(Object.values(createdByMonth[m]).reduce((a, b) => a + b, 0)),
+    by_pipeline: Object.fromEntries(Object.entries(createdByMonth[m]).map(([k, v]) => [k, Math.round(v)])),
     is_current_month: m === monthKey(new Date().toISOString()),
   }));
 
@@ -250,19 +258,31 @@ router.get('/dashboard', async (req, res) => {
   // ── Average value of won deals: este año vs año anterior ──
   const wonThisYear = (deals || []).filter((d) => d.status === 'ganado' && d.closed_at >= yearStart && d.closed_at < yearEnd);
   const wonPrevYear = (deals || []).filter((d) => d.status === 'ganado' && d.closed_at >= prevYearStart && d.closed_at < prevYearEnd);
-  const avg = (arr) => (arr.length ? arr.reduce((sum, d) => sum + Number(d.value || 0), 0) / arr.length : 0);
+  const avg = (arr) => (arr.length ? arr.reduce((sum, d) => sum + toUsd(d.value, d.currency), 0) / arr.length : 0);
   const avgThisYear = avg(wonThisYear);
   const avgPrevYear = avg(wonPrevYear);
   const pctChange = avgPrevYear ? Math.round(((avgThisYear - avgPrevYear) / avgPrevYear) * 1000) / 10 : null;
+
+  // ── País líder en ventas (ingresos reales de tratos ganados, todo el historial) ──
+  // Llena el hueco que quedaba junto al valor promedio de tratos ganados.
+  const allWonDeals = (deals || []).filter((d) => d.status === 'ganado');
+  const salesByCountry = {};
+  allWonDeals.forEach((d) => {
+    const country = d.companies?.country?.trim() || 'Sin especificar';
+    salesByCountry[country] = (salesByCountry[country] || 0) + toUsd(d.value, d.currency);
+  });
+  const sales_by_country = Object.entries(salesByCountry)
+    .map(([name, value_usd]) => ({ name, value_usd: Math.round(value_usd) }))
+    .sort((a, b) => b.value_usd - a.value_usd);
 
   // ── Deals won over time: valor de deals ganados por mes de cierre ──
   const wonByMonth = {};
   months.forEach((m) => { wonByMonth[m] = 0; });
   wonThisYear.forEach((d) => {
     const key = monthKey(d.closed_at);
-    if (wonByMonth[key] !== undefined) wonByMonth[key] += Number(d.value || 0);
+    if (wonByMonth[key] !== undefined) wonByMonth[key] += toUsd(d.value, d.currency);
   });
-  const deals_won_by_month = months.map((m) => ({ month: m, label: monthLabel(m), value: wonByMonth[m], is_current_month: m === monthKey(new Date().toISOString()) }));
+  const deals_won_by_month = months.map((m) => ({ month: m, label: monthLabel(m), value: Math.round(wonByMonth[m]), is_current_month: m === monthKey(new Date().toISOString()) }));
 
   res.json({
     year,
@@ -274,6 +294,7 @@ router.get('/dashboard', async (req, res) => {
     deals_lost_by_reason,
     lost_total: lostDeals.length,
     won_avg_value: { current: Math.round(avgThisYear), previous: Math.round(avgPrevYear), pct_change: pctChange, count: wonThisYear.length },
+    sales_by_country,
     deals_won_by_month,
   });
 });
