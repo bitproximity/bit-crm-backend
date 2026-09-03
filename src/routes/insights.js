@@ -265,10 +265,25 @@ router.get('/dashboard', async (req, res) => {
 
   // ── País líder en ventas (ingresos reales de tratos ganados, todo el historial) ──
   // Llena el hueco que quedaba junto al valor promedio de tratos ganados.
+  // Si la empresa no tiene país cargado (pasa mucho con clientes chicos de WiFi Marketing,
+  // cargados rápido sin llenar ese campo), se infiere del pipeline cuando el pipeline es
+  // de un país puntual (Bit Colombia, Bit México, etc.) — pipelines multi-país como
+  // "WiFi Marketing" u "Omnicanalidad" no permiten inferir nada, ahí se queda "Sin especificar".
+  const PIPELINE_COUNTRY = {
+    'Bit Colombia': 'Colombia',
+    'Bit México': 'México',
+    'Bit Ecuador': 'Ecuador',
+    'Bit RD': 'República Dominicana',
+    'Bit Panamá': 'Panamá',
+    'Bit LLC': 'Estados Unidos',
+    'Bit Paraguay': 'Paraguay',
+    'Bit Perú': 'Perú',
+  };
   const allWonDeals = (deals || []).filter((d) => d.status === 'ganado');
   const salesByCountry = {};
   allWonDeals.forEach((d) => {
-    const country = d.companies?.country?.trim() || 'Sin especificar';
+    const pName = pipelineNameById[d.pipeline_id];
+    const country = d.companies?.country?.trim() || PIPELINE_COUNTRY[pName] || 'Sin especificar';
     salesByCountry[country] = (salesByCountry[country] || 0) + toUsd(d.value, d.currency);
   });
   const sales_by_country = Object.entries(salesByCountry)
