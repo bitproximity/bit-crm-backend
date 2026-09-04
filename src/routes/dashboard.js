@@ -60,7 +60,7 @@ router.get('/', async (req, res) => {
     supabase.from('deals').select('title, value, currency, closed_at, companies(name)').eq('status', 'ganado').order('closed_at', { ascending: false }).limit(5),
     // Ventas (tratos ganados, todo el historial) agrupadas por embudo — para saber cuál
     // pipeline vende más, a diferencia de pipeline_breakdown que es sobre lo abierto.
-    supabase.from('deals').select('value, currency, pipelines(name)').eq('status', 'ganado'),
+    supabase.from('deals').select('value, currency, pipeline_id, pipelines(name)').eq('status', 'ganado'),
     // Ranking de productos por ingresos reales — mismo cálculo que /api/metrics/products,
     // pero embebido aquí (esa ruta es __admin_only__ y el Dashboard es para todo el equipo).
     supabase
@@ -96,10 +96,11 @@ router.get('/', async (req, res) => {
   const salesByPipeline = {};
   (pipelineSalesRows || []).forEach((d) => {
     const name = d.pipelines?.name || 'Sin pipeline';
-    salesByPipeline[name] = (salesByPipeline[name] || 0) + toUsd(d.value, d.currency);
+    if (!salesByPipeline[name]) salesByPipeline[name] = { id: d.pipeline_id, value_usd: 0 };
+    salesByPipeline[name].value_usd += toUsd(d.value, d.currency);
   });
   const topPipelineBySales = Object.entries(salesByPipeline)
-    .map(([name, value_usd]) => ({ name, value_usd: Math.round(value_usd) }))
+    .map(([name, v]) => ({ id: v.id, name, value_usd: Math.round(v.value_usd) }))
     .sort((a, b) => b.value_usd - a.value_usd)[0] || null;
 
   // Producto/servicio con más ventas (ingresos reales de línea de producto en tratos ganados)

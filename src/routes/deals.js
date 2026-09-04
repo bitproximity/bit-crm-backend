@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
+const { resolveDealCountry } = require('../utils/pipelineCountry');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -10,7 +11,7 @@ router.use(requirePage('deals'));
 
 // GET /api/deals?pipeline_id=&owner_id=&status=&stage_id=&lost_reason=&created_month=YYYY-MM&closed_month=YYYY-MM
 router.get('/', async (req, res) => {
-  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month, search, limit } = req.query;
+  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month, country, search, limit } = req.query;
 
   // Búsqueda rápida (ej. buscador de tratos para reasignar una actividad) — no pagina todo,
   // solo trae hasta "limit" resultados directo. Separado del loop de abajo, que sí está
@@ -18,15 +19,18 @@ router.get('/', async (req, res) => {
   if (search || limit) {
     let query = supabase
       .from('deals')
-      .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position), pipelines(name)')
+      .select('*, contacts(first_name,last_name), companies(name,country), pipeline_stages(name,position), pipelines(name)')
       .order('updated_at', { ascending: false })
       .limit(Number(limit) || 20);
     if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
     if (owner_id) query = query.eq('owner_id', owner_id);
     if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
     if (search) query = query.ilike('title', `%${search}%`);
-    const { data, error } = await query;
+    let { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
+    // Mismo criterio de país (empresa, o inferido del pipeline) que usa el ranking de
+    // Métricas — así el detalle siempre cuadra con el número que lo llevó hasta acá.
+    if (country) data = data.filter((d) => resolveDealCountry(d.companies?.country, d.pipelines?.name) === country);
     return res.json(data);
   }
 
@@ -40,7 +44,7 @@ router.get('/', async (req, res) => {
   while (true) {
     let query = supabase
       .from('deals')
-      .select('*, contacts(first_name,last_name), companies(name), pipeline_stages(name,position), pipelines(name)')
+      .select('*, contacts(first_name,last_name), companies(name,country), pipeline_stages(name,position), pipelines(name)')
       .order('updated_at', { ascending: false })
       .range(from, from + pageSize - 1);
 
@@ -77,6 +81,10 @@ router.get('/', async (req, res) => {
     if (data.length < pageSize) break;
     from += pageSize;
   }
+
+  // Mismo criterio de país (empresa, o inferido del pipeline) que usa el ranking de
+  // Métricas — así el detalle siempre cuadra con el número que lo llevó hasta acá.
+  if (country) allDeals = allDeals.filter((d) => resolveDealCountry(d.companies?.country, d.pipelines?.name) === country);
 
   res.json(allDeals);
 });
