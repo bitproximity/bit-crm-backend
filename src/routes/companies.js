@@ -39,9 +39,6 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  if (!req.body.country || !req.body.country.trim()) {
-    return res.status(400).json({ error: 'El país es obligatorio para crear una empresa.' });
-  }
   const { data, error } = await supabase.from('companies').insert(req.body).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
