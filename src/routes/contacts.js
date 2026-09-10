@@ -6,22 +6,30 @@ const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+router.use(requirePage('contactos'));
 
-// GET /api/contacts?status=&owner_id=&search=&page=&limit=
+// GET /api/contacts?status=&owner_id=&country=&position=&industry=&search=&page=&limit=
 router.get('/', async (req, res) => {
-  const { status, owner_id, search, page = 1, limit = 50 } = req.query;
+  const { status, owner_id, country, position, industry, search, page = 1, limit = 50 } = req.query;
   const from = (page - 1) * limit;
   const to = from + Number(limit) - 1;
 
+  // Si se filtra por industria (atributo de la empresa, no del contacto), el join a
+  // companies tiene que ser "!inner" para que el filtro realmente restrinja los
+  // resultados — con el join normal (left join) PostgREST lo ignora.
+  const companiesSelect = industry ? 'companies!inner(name, industry)' : 'companies(name)';
+
   let query = supabase
     .from('contacts')
-    .select('*, companies(name), team_members!contacts_owner_id_fkey(full_name)', { count: 'exact' })
+    .select(`*, ${companiesSelect}, team_members!contacts_owner_id_fkey(full_name)`, { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(from, to);
 
   if (status) query = query.eq('status', status);
   if (owner_id) query = query.eq('owner_id', owner_id);
+  if (country) query = query.eq('country', country);
+  if (position) query = query.eq('position', position);
+  if (industry) query = query.eq('companies.industry', industry);
   if (search) {
     query = query.or(
       `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`
