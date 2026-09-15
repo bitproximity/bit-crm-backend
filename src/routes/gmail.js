@@ -13,7 +13,9 @@ router.get('/connect', requireAuth, (req, res) => {
   const client = getOAuthClient();
   const url = client.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent', // fuerza refresh_token incluso si ya autorizó antes
+    // select_account fuerza el selector de cuenta de Google en vez de reusar la sesión
+    // activa del navegador — si no, "conectar otra cuenta" reconectaría siempre la misma.
+    prompt: 'select_account consent',
     scope: GMAIL_SCOPES,
     state: req.teamMember.id, // para saber a qué usuario asociar en el callback
   });
@@ -34,6 +36,11 @@ router.get('/callback', async (req, res) => {
     const oauth2 = google.oauth2({ auth: client, version: 'v2' });
     const { data: userInfo } = await oauth2.userinfo.get();
 
+    // onConflict por (team_member_id, email): conectar una cuenta NUEVA agrega una fila
+    // aparte en vez de pisar la que ya tenías — así se pueden tener varias cuentas
+    // conectadas a la vez (ej. mario@bitproximity.com + mario@bitwifiapp.com). Si
+    // reconectás la MISMA cuenta (ej. para refrescar el token), sigue actualizando la
+    // fila existente en vez de duplicarla.
     await supabase.from('gmail_connections').upsert(
       {
         team_member_id: teamMemberId,
@@ -42,7 +49,7 @@ router.get('/callback', async (req, res) => {
         access_token: tokens.access_token,
         token_expires_at: new Date(tokens.expiry_date).toISOString(),
       },
-      { onConflict: 'team_member_id' }
+      { onConflict: 'team_member_id,email' }
     );
 
     res.redirect(`${PUBLIC_APP_URL}/profile?gmail=connected`);
@@ -54,45 +61,55 @@ router.get('/callback', async (req, res) => {
 
 router.use(requireAuth);
 
-// GET /api/gmail/status
+// GET /api/gmail/status — ahora puede haber más de una cuenta conectada
 router.get('/status', async (req, res) => {
   const { data, error } = await supabase
     .from('gmail_connections')
     .select('email')
     .eq('team_member_id', req.teamMember.id)
-    .maybeSingle();
+    .order('id', { ascending: true });
 
-  // "connected_at" nunca existió como columna real (nunca se creó por migración ni se
-  // guardaba al conectar) — pedirla acá hacía fallar la consulta en silencio, y por eso
-  // esto SIEMPRE devolvía "no conectado" aunque sí lo estuvieras. Ahora se revisa el
-  // error explícitamente en vez de ignorarlo.
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json({ connected: !!data, email: data?.email || null });
+  const connections = data || [];
+  // Se mantienen "connected"/"email" (la primera cuenta conectada) por compatibilidad con
+  // quien todavía lea la respuesta vieja, y se agrega "connections" con todas.
+  res.json({ connected: connections.length > 0, email: connections[0]?.email || null, connections });
 });
 
-// DELETE /api/gmail/disconnect
-router.delete('/disconnect', async (req, res) => {
-  await supabase.from('gmail_connections').delete().eq('team_member_id', req.teamMember.id);
+// DELETE /api/gmail/disconnect/:email — desconecta una cuenta puntual (antes solo había una)
+router.delete('/disconnect/:email', async (req, res) => {
+  await supabase.from('gmail_connections').delete().eq('team_member_id', req.teamMember.id).eq('email', decodeURIComponent(req.params.email));
   res.status(204).send();
 });
 
 /**
- * Trae un cliente Gmail autenticado para el usuario actual, refrescando el
- * access_token si hace falta.
+ * Trae UN cliente Gmail autenticado — la cuenta "principal" (la primera que se conectó).
+ * Se usa solo donde de verdad hace falta una sola cuenta de referencia (por ahora, nada
+ * más internamente; se deja por compatibilidad de firma con otras funciones del archivo).
  */
 async function getGmailClientForUser(teamMemberId) {
-  const { data: conn } = await supabase
+  const clients = await getAllGmailClientsForUser(teamMemberId);
+  return clients[0]?.gmail || null;
+}
+
+/**
+ * Trae un cliente Gmail autenticado POR CADA cuenta conectada de esta persona — para que
+ * buscar/sincronizar correos, o traer sus contactos de Google, mire en todas las cuentas
+ * conectadas (ej. mario@bitproximity.com Y mario@bitwifiapp.com) y no solo en la primera.
+ */
+async function getAllGmailClientsForUser(teamMemberId) {
+  const { data: conns } = await supabase
     .from('gmail_connections')
     .select('*')
     .eq('team_member_id', teamMemberId)
-    .single();
+    .order('id', { ascending: true });
 
-  if (!conn) return null;
-
-  const client = getOAuthClient();
-  client.setCredentials({ refresh_token: conn.refresh_token });
-  return google.gmail({ version: 'v1', auth: client });
+  return (conns || []).map((conn) => {
+    const client = getOAuthClient();
+    client.setCredentials({ refresh_token: conn.refresh_token });
+    return { email: conn.email, gmail: google.gmail({ version: 'v1', auth: client }) };
+  });
 }
 
 // POST /api/gmail/sync/:entity_type/:entity_id  { email } — busca correos con ese contacto y los guarda
@@ -102,68 +119,72 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
   if (!email) return res.status(400).json({ error: 'Falta el email del contacto' });
 
-  const gmail = await getGmailClientForUser(req.teamMember.id);
-  if (!gmail) return res.status(400).json({ error: 'No has conectado tu Gmail todavía' });
+  const clients = await getAllGmailClientsForUser(req.teamMember.id);
+  if (clients.length === 0) return res.status(400).json({ error: 'No has conectado tu Gmail todavía' });
 
   try {
-    const { data: list } = await gmail.users.messages.list({
-      userId: 'me',
-      q: `from:${email} OR to:${email}`,
-      maxResults: 20,
-    });
-
-    const messages = list.messages || [];
     const saved = [];
-    const failedCount = { value: 0 };
 
-    for (const m of messages) {
-      try {
-        const { data: full } = await gmail.users.messages.get({
-          userId: 'me',
-          id: m.id,
-          format: 'metadata',
-          metadataHeaders: ['From', 'To', 'Subject', 'Date'],
-        });
+    // Busca en TODAS las cuentas conectadas (ej. si el contacto te escribió tanto a tu
+    // correo de Bit Proximity como al de Bit WiFi) — se deduplica solo porque
+    // gmail_message_id es único entre cuentas distintas de Google.
+    for (const { gmail } of clients) {
+      const { data: list } = await gmail.users.messages.list({
+        userId: 'me',
+        q: `from:${email} OR to:${email}`,
+        maxResults: 20,
+      });
 
-        const headers = Object.fromEntries(
-          (full.payload?.headers || []).map((h) => [h.name.toLowerCase(), h.value])
-        );
+      const messages = list.messages || [];
 
-        // Algunos correos traen la fecha en un formato que Date() no puede parsear —
-        // antes esto reventaba con "Invalid time value" y tumbaba TODA la sincronización
-        // (no solo ese mensaje), porque estaba fuera de cualquier manejo de errores.
-        let sentAt = null;
-        if (headers.date) {
-          const parsed = new Date(headers.date);
-          if (!isNaN(parsed.getTime())) sentAt = parsed.toISOString();
+      for (const m of messages) {
+        try {
+          const { data: full } = await gmail.users.messages.get({
+            userId: 'me',
+            id: m.id,
+            format: 'metadata',
+            metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+          });
+
+          const headers = Object.fromEntries(
+            (full.payload?.headers || []).map((h) => [h.name.toLowerCase(), h.value])
+          );
+
+          // Algunos correos traen la fecha en un formato que Date() no puede parsear —
+          // antes esto reventaba con "Invalid time value" y tumbaba TODA la sincronización
+          // (no solo ese mensaje), porque estaba fuera de cualquier manejo de errores.
+          let sentAt = null;
+          if (headers.date) {
+            const parsed = new Date(headers.date);
+            if (!isNaN(parsed.getTime())) sentAt = parsed.toISOString();
+          }
+
+          const { data: row, error: upsertError } = await supabase
+            .from('gmail_messages')
+            .upsert(
+              {
+                gmail_message_id: m.id,
+                team_member_id: req.teamMember.id,
+                entity_type,
+                entity_id,
+                from_email: headers.from,
+                to_emails: headers.to ? headers.to.split(',').map((s) => s.trim()) : [],
+                subject: headers.subject,
+                snippet: full.snippet,
+                sent_at: sentAt,
+              },
+              { onConflict: 'gmail_message_id' }
+            )
+            .select()
+            .single();
+
+          if (upsertError) continue;
+          saved.push(row);
+        } catch (msgErr) {
+          // Un mensaje individual que falle (borrado en Gmail, formato inesperado, etc.)
+          // no debe tumbar el resto de la sincronización.
+          console.error('Error sincronizando un mensaje puntual:', m.id, msgErr.message);
         }
-
-        const { data: row, error: upsertError } = await supabase
-          .from('gmail_messages')
-          .upsert(
-            {
-              gmail_message_id: m.id,
-              team_member_id: req.teamMember.id,
-              entity_type,
-              entity_id,
-              from_email: headers.from,
-              to_emails: headers.to ? headers.to.split(',').map((s) => s.trim()) : [],
-              subject: headers.subject,
-              snippet: full.snippet,
-              sent_at: sentAt,
-            },
-            { onConflict: 'gmail_message_id' }
-          )
-          .select()
-          .single();
-
-        if (upsertError) { failedCount.value++; continue; }
-        saved.push(row);
-      } catch (msgErr) {
-        // Un mensaje individual que falle (borrado en Gmail, formato inesperado, etc.)
-        // no debe tumbar el resto de la sincronización.
-        console.error('Error sincronizando un mensaje puntual:', m.id, msgErr.message);
-        failedCount.value++;
       }
     }
 
@@ -188,52 +209,62 @@ router.get('/messages/:entity_type/:entity_id', async (req, res) => {
   res.json(data);
 });
 
-// GET /api/gmail/contacts — lista los contactos de Google (People API) del usuario conectado
+// GET /api/gmail/contacts — lista los contactos de Google (People API) de TODAS las cuentas conectadas
 router.get('/contacts', async (req, res) => {
-  const { data: conn } = await supabase
+  const { data: conns } = await supabase
     .from('gmail_connections')
     .select('refresh_token')
     .eq('team_member_id', req.teamMember.id)
-    .single();
+    .order('id', { ascending: true });
 
-  if (!conn) return res.status(400).json({ error: 'No has conectado tu Google todavía' });
-
-  const client = getOAuthClient();
-  client.setCredentials({ refresh_token: conn.refresh_token });
-  const people = google.people({ version: 'v1', auth: client });
+  if (!conns || conns.length === 0) return res.status(400).json({ error: 'No has conectado tu Google todavía' });
 
   try {
-    const { data } = await people.people.connections.list({
-      resourceName: 'people/me',
-      pageSize: 500,
-      personFields: 'names,emailAddresses,phoneNumbers,organizations',
-    });
+    const seen = new Set(); // dedup por email entre cuentas
+    const contacts = [];
 
-    let rawContacts = data.connections || [];
+    for (const conn of conns) {
+      const client = getOAuthClient();
+      client.setCredentials({ refresh_token: conn.refresh_token });
+      const people = google.people({ version: 'v1', auth: client });
 
-    // Si la libreta de Contactos está vacía (común en cuentas de trabajo),
-    // usamos "Otros contactos" — la gente con la que Gmail detectó que
-    // interactuaste, aunque no los hayas guardado explícitamente.
-    if (rawContacts.length === 0) {
-      const { data: otherData } = await people.otherContacts.list({
+      const { data } = await people.people.connections.list({
+        resourceName: 'people/me',
         pageSize: 500,
-        readMask: 'names,emailAddresses,phoneNumbers',
+        personFields: 'names,emailAddresses,phoneNumbers,organizations',
       });
-      rawContacts = otherData.otherContacts || [];
+
+      let rawContacts = data.connections || [];
+
+      // Si la libreta de Contactos está vacía (común en cuentas de trabajo),
+      // usamos "Otros contactos" — la gente con la que Gmail detectó que
+      // interactuaste, aunque no los hayas guardado explícitamente.
+      if (rawContacts.length === 0) {
+        const { data: otherData } = await people.otherContacts.list({
+          pageSize: 500,
+          readMask: 'names,emailAddresses,phoneNumbers',
+        });
+        rawContacts = otherData.otherContacts || [];
+      }
+
+      rawContacts
+        .filter((p) => p.emailAddresses?.length)
+        .forEach((p) => {
+          const email = p.emailAddresses[0].value;
+          if (seen.has(email)) return; // ya vino de otra cuenta conectada
+          seen.add(email);
+          contacts.push({
+            first_name: p.names?.[0]?.givenName || p.names?.[0]?.displayName?.split(' ')[0] || 'Sin nombre',
+            last_name: p.names?.[0]?.familyName || '',
+            email,
+            phone: p.phoneNumbers?.[0]?.value || null,
+            company_name: p.organizations?.[0]?.name || null,
+          });
+        });
     }
 
-    const contacts = rawContacts
-      .filter((p) => p.emailAddresses?.length) // solo los que tienen email, para poder deduplicar
-      .map((p) => ({
-        first_name: p.names?.[0]?.givenName || p.names?.[0]?.displayName?.split(' ')[0] || 'Sin nombre',
-        last_name: p.names?.[0]?.familyName || '',
-        email: p.emailAddresses[0].value,
-        phone: p.phoneNumbers?.[0]?.value || null,
-        company_name: p.organizations?.[0]?.name || null,
-      }));
-
     if (contacts.length === 0) {
-      return res.status(404).json({ error: 'No se encontraron contactos con email en tu cuenta de Google (ni en Contactos ni en Otros contactos).' });
+      return res.status(404).json({ error: 'No se encontraron contactos con email en tus cuentas de Google conectadas.' });
     }
 
     res.json(contacts);
@@ -244,15 +275,18 @@ router.get('/contacts', async (req, res) => {
 });
 
 // GET /api/gmail/calendar/events?days=14 — próximos eventos del calendario conectado
+// (cuenta "principal" — la primera conectada; con varias cuentas conectadas, Calendar
+// solo mira una para no mezclar eventos de dos calendarios distintos en una sola lista)
 router.get('/calendar/events', async (req, res) => {
   const days = Number(req.query.days) || 14;
-  const gmail = await getGmailClientForUser(req.teamMember.id); // reutiliza el mismo cliente OAuth
 
   const conn = await supabase
     .from('gmail_connections')
     .select('*')
     .eq('team_member_id', req.teamMember.id)
-    .single();
+    .order('id', { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (!conn.data) return res.status(400).json({ error: 'No has conectado tu cuenta de Google todavía' });
 

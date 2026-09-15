@@ -5,10 +5,16 @@ const { getOAuthClient } = require('../config/googleOAuth');
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
 async function getCalendarClientForUser(teamMemberId) {
+  // Cuenta "principal" (la primera conectada) — con varias cuentas de Google conectadas,
+  // las tareas/actividades se sincronizan solo con una para no duplicar el evento en dos
+  // calendarios. order+limit(1) en vez de maybeSingle(): con más de una fila, maybeSingle()
+  // también truena (no solo single()).
   const { data: conn } = await supabase
     .from('gmail_connections')
     .select('refresh_token, email')
     .eq('team_member_id', teamMemberId)
+    .order('id', { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (!conn?.refresh_token) return null; // no conectó su Google, no hay nada que sincronizar
