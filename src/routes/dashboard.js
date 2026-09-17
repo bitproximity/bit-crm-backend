@@ -106,8 +106,10 @@ router.get('/', async (req, res) => {
   // Producto/servicio con más ventas (ingresos reales de línea de producto en tratos ganados)
   const salesByProduct = {};
   (productSalesRows || []).forEach((it) => {
-    const key = it.product_id || `sin_producto:${it.products?.name || 'Producto sin nombre'}`;
-    const name = it.products?.name || 'Producto sin nombre';
+    // Las líneas sin producto vinculado (product_id null — se cargaron a mano sin elegir
+    // del catálogo) se agrupan como "WiFi Marketing": es de ahí de donde vienen casi todas.
+    const key = it.product_id || `sin_producto:${it.products?.name || 'WiFi Marketing'}`;
+    const name = it.products?.name || 'WiFi Marketing';
     const revenueUsd = toUsd(Number(it.quantity || 0) * Number(it.unit_price || 0), it.currency);
     if (!salesByProduct[key]) salesByProduct[key] = { name, revenue_usd: 0, quantity: 0 };
     salesByProduct[key].revenue_usd += revenueUsd;

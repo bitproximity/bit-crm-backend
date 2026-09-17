@@ -145,8 +145,10 @@ router.get('/products', async (req, res) => {
   const products = {};
 
   (items || []).forEach((it) => {
-    const key = it.product_id || `sin_producto:${it.products?.name || 'Producto sin nombre'}`;
-    const name = it.products?.name || 'Producto sin nombre';
+    // Las líneas sin producto vinculado (product_id null — se cargaron a mano sin elegir
+    // del catálogo) se agrupan como "WiFi Marketing": es de ahí de donde vienen casi todas.
+    const key = it.product_id || `sin_producto:${it.products?.name || 'WiFi Marketing'}`;
+    const name = it.products?.name || 'WiFi Marketing';
     const revenueUsd = toUsd(Number(it.quantity || 0) * Number(it.unit_price || 0), it.currency);
     const country = it.deals?.companies?.country?.trim() || 'Sin especificar';
     const industry = it.deals?.companies?.industry?.trim() || 'Sin especificar';

@@ -186,7 +186,7 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, created_at, closed_at, lost_reason, companies(country)');
+    .select('id, value, currency, pipeline_id, company_id, status, created_at, closed_at, lost_reason, facturacion, companies(country)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
   const [{ data: deals, error }, { data: rates }] = await Promise.all([dealsQuery, supabase.from('exchange_rates').select('*')]);
@@ -280,6 +280,19 @@ router.get('/dashboard', async (req, res) => {
     .map(([name, value_usd]) => ({ name, value_usd: Math.round(value_usd) }))
     .sort((a, b) => b.value_usd - a.value_usd);
 
+  // ── Ventas por facturación (campo explícito del trato, no inferido) ──
+  // A diferencia de "sales_by_country" de arriba (que adivina el país por la empresa o el
+  // pipeline), este usa el campo "Facturación" que se carga a mano en cada trato — más
+  // confiable porque es la entidad real que factura, no una aproximación.
+  const salesByFacturacion = {};
+  allWonDeals.forEach((d) => {
+    const key = d.facturacion?.trim() || 'Sin especificar';
+    salesByFacturacion[key] = (salesByFacturacion[key] || 0) + toUsd(d.value, d.currency);
+  });
+  const sales_by_facturacion = Object.entries(salesByFacturacion)
+    .map(([name, value_usd]) => ({ name, value_usd: Math.round(value_usd) }))
+    .sort((a, b) => b.value_usd - a.value_usd);
+
   // ── Deals won over time: valor de deals ganados por mes de cierre ──
   const wonByMonth = {};
   months.forEach((m) => { wonByMonth[m] = 0; });
@@ -300,6 +313,7 @@ router.get('/dashboard', async (req, res) => {
     lost_total: lostDeals.length,
     won_avg_value: { current: Math.round(avgThisYear), previous: Math.round(avgPrevYear), pct_change: pctChange, count: wonThisYear.length },
     sales_by_country,
+    sales_by_facturacion,
     deals_won_by_month,
   });
 });
