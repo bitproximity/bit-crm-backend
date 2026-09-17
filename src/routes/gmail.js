@@ -112,6 +112,32 @@ async function getAllGmailClientsForUser(teamMemberId) {
   });
 }
 
+// Extrae el cuerpo (texto plano y HTML) del payload de un mensaje de Gmail — los mensajes
+// vienen como un árbol de "parts" anidado (texto y HTML como hermanos, y a veces todo
+// envuelto en un part "multipart/*" sin contenido propio), así que hay que recorrerlo.
+function extractBody(payload) {
+  let text = null;
+  let html = null;
+
+  function walk(part) {
+    if (!part) return;
+    const data = part.body?.data;
+    if (data) {
+      // Gmail codifica el cuerpo en base64url (usa "-"/"_" en vez de "+"/"/") — se
+      // normaliza a base64 estándar a mano en vez de depender de que el Node del
+      // servidor soporte el encoding 'base64url' nativo de Buffer.
+      const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
+      const decoded = Buffer.from(normalized, 'base64').toString('utf8');
+      if (part.mimeType === 'text/plain' && !text) text = decoded;
+      if (part.mimeType === 'text/html' && !html) html = decoded;
+    }
+    (part.parts || []).forEach(walk);
+  }
+
+  walk(payload);
+  return { text, html };
+}
+
 // POST /api/gmail/sync/:entity_type/:entity_id  { email } — busca correos con ese contacto y los guarda
 router.post('/sync/:entity_type/:entity_id', async (req, res) => {
   const { entity_type, entity_id } = req.params;
@@ -139,16 +165,18 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
       for (const m of messages) {
         try {
+          // format: 'full' en vez de 'metadata' — antes solo se guardaba snippet (el
+          // fragmento corto de preview de Gmail), no el correo completo.
           const { data: full } = await gmail.users.messages.get({
             userId: 'me',
             id: m.id,
-            format: 'metadata',
-            metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+            format: 'full',
           });
 
           const headers = Object.fromEntries(
             (full.payload?.headers || []).map((h) => [h.name.toLowerCase(), h.value])
           );
+          const { text: bodyText, html: bodyHtml } = extractBody(full.payload);
 
           // Algunos correos traen la fecha en un formato que Date() no puede parsear —
           // antes esto reventaba con "Invalid time value" y tumbaba TODA la sincronización
@@ -171,6 +199,8 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
                 to_emails: headers.to ? headers.to.split(',').map((s) => s.trim()) : [],
                 subject: headers.subject,
                 snippet: full.snippet,
+                body_text: bodyText,
+                body_html: bodyHtml,
                 sent_at: sentAt,
               },
               { onConflict: 'gmail_message_id' }
