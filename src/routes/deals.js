@@ -121,28 +121,54 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// Si un campo nuevo (ej. una migración que Mario todavía no corrió en Supabase) no existe
+// en la tabla, Postgres devuelve "Could not find the 'X' column..." — antes eso tumbaba la
+// creación del trato ENTERA, no solo el campo nuevo. Ahora se detecta, se saca ese campo
+// puntual del payload, se reintenta una vez, y se avisa en la respuesta qué se ignoró — así
+// una migración pendiente nunca vuelve a bloquear crear/editar un trato.
+async function upsertDealTolerant(fn, payload) {
+  let body = { ...payload };
+  const skipped = [];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const result = await fn(body);
+    if (!result.error) return { ...result, skipped };
+    const match = /Could not find the '(\w+)' column/.exec(result.error.message || '');
+    if (!match || !(match[1] in body)) return result;
+    skipped.push(match[1]);
+    delete body[match[1]];
+  }
+  return { error: { message: 'No se pudo guardar el trato después de varios intentos.' } };
+}
+
 router.post('/', async (req, res) => {
   // El propietario siempre es quien está creando el trato, salvo que se mande owner_id explícito
   // (ej. un admin creándolo a nombre de otra persona desde una importación).
   const payload = { owner_id: req.teamMember.id, ...req.body };
-  const { data, error } = await supabase.from('deals').insert(payload).select().single();
+  const { data, error, skipped } = await upsertDealTolerant(
+    (p) => supabase.from('deals').insert(p).select().single(),
+    payload
+  );
   if (error) return res.status(400).json({ error: error.message });
 
   await logAudit('deal', data.id, 'created', req.teamMember.id);
+  if (skipped?.length) {
+    console.warn(`Trato ${data.id} creado sin: ${skipped.join(', ')} — falta correr la migración que los agrega.`);
+  }
   res.status(201).json(data);
 });
 
 // PATCH /api/deals/:id — actualización general (título, valor, dueño, etc.)
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
-  const { data, error } = await supabase
-    .from('deals')
-    .update(req.body)
-    .eq('id', id)
-    .select()
-    .single();
+  const { data, error, skipped } = await upsertDealTolerant(
+    (p) => supabase.from('deals').update(p).eq('id', id).select().single(),
+    req.body
+  );
 
   if (error) return res.status(400).json({ error: error.message });
+  if (skipped?.length) {
+    console.warn(`Trato ${id} actualizado sin: ${skipped.join(', ')} — falta correr la migración que los agrega.`);
+  }
   await logAudit('deal', id, 'updated', req.teamMember.id, { fields: Object.keys(req.body) });
   res.json(data);
 });
