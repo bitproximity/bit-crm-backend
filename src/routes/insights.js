@@ -186,21 +186,12 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, probability, created_at, closed_at, lost_reason, facturacion, companies(country)');
+    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, created_at, closed_at, lost_reason, facturacion, companies(country)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
-  // Para MRR/ARR: valor de línea por trato, con el tipo de facturación de cada producto
-  // (mensual/anual/único) — normalizado a mensual antes de sumar. Se trae aparte porque
-  // "deals" de arriba no incluye las líneas de producto.
-  let lineItemsQuery = supabase
-    .from('deal_line_items')
-    .select('quantity, unit_price, currency, deal_id, products(billing_frequency), deals!inner(status, probability, pipeline_id)');
-  if (pipeline_id) lineItemsQuery = lineItemsQuery.eq('deals.pipeline_id', pipeline_id);
-
-  const [{ data: deals, error }, { data: rates }, { data: lineItems }] = await Promise.all([
+  const [{ data: deals, error }, { data: rates }] = await Promise.all([
     dealsQuery,
     supabase.from('exchange_rates').select('*'),
-    lineItemsQuery,
   ]);
 
   if (error) return res.status(500).json({ error: error.message });
@@ -306,28 +297,28 @@ router.get('/dashboard', async (req, res) => {
     .sort((a, b) => b.value_usd - a.value_usd);
 
   // ── MRR / ARR ──
-  // Normaliza cada línea de producto a un valor mensual según su frecuencia de
-  // facturación: mensual tal cual, anual /12, único no cuenta para MRR (es un pago que no
-  // se repite). Las líneas sin producto vinculado se asumen mensuales — mismo criterio que
-  // "WiFi Marketing" en /api/metrics/products, de ahí vienen casi todas.
+  // Se basa en el campo "Frecuencia de facturación" del TRATO mismo (no del producto) —
+  // más directo: quien cierra el trato sabe si el contrato se factura mensual o anual, sin
+  // depender de que cada producto del catálogo esté bien clasificado.
+  // mensual: el valor del trato tal cual. anual: valor del trato /12. único: no cuenta
+  // para MRR (es un pago que no se repite).
   // OJO: no hay seguimiento de cancelaciones/churn todavía, así que "MRR ganado" es en
   // realidad la suma de todo lo vendido como recurrente históricamente, asumiendo que sigue
   // activo — no un MRR verificado mes a mes.
-  const monthlyValue = (li) => {
-    const freq = li.products?.billing_frequency || 'mensual';
+  const monthlyValue = (d) => {
+    const freq = d.billing_frequency || 'mensual';
     if (freq === 'unico') return 0;
-    const raw = toUsd(Number(li.quantity || 0) * Number(li.unit_price || 0), li.currency);
+    const raw = toUsd(d.value, d.currency);
     return freq === 'anual' ? raw / 12 : raw;
   };
 
   let mrrWon = 0, mrrPipeline = 0, mrrPipelineWeighted = 0;
-  (lineItems || []).forEach((li) => {
-    const status = li.deals?.status;
-    const m = monthlyValue(li);
-    if (status === 'ganado') mrrWon += m;
-    else if (status === 'abierto') {
+  (deals || []).forEach((d) => {
+    const m = monthlyValue(d);
+    if (d.status === 'ganado') mrrWon += m;
+    else if (d.status === 'abierto') {
       mrrPipeline += m;
-      mrrPipelineWeighted += m * (Number(li.deals?.probability || 0) / 100);
+      mrrPipelineWeighted += m * (Number(d.probability || 0) / 100);
     }
   });
 
