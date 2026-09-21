@@ -186,10 +186,22 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, created_at, closed_at, lost_reason, facturacion, companies(country)');
+    .select('id, value, currency, pipeline_id, company_id, status, probability, created_at, closed_at, lost_reason, facturacion, companies(country)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
-  const [{ data: deals, error }, { data: rates }] = await Promise.all([dealsQuery, supabase.from('exchange_rates').select('*')]);
+  // Para MRR/ARR: valor de línea por trato, con el tipo de facturación de cada producto
+  // (mensual/anual/único) — normalizado a mensual antes de sumar. Se trae aparte porque
+  // "deals" de arriba no incluye las líneas de producto.
+  let lineItemsQuery = supabase
+    .from('deal_line_items')
+    .select('quantity, unit_price, currency, deal_id, products(billing_frequency), deals!inner(status, probability, pipeline_id)');
+  if (pipeline_id) lineItemsQuery = lineItemsQuery.eq('deals.pipeline_id', pipeline_id);
+
+  const [{ data: deals, error }, { data: rates }, { data: lineItems }] = await Promise.all([
+    dealsQuery,
+    supabase.from('exchange_rates').select('*'),
+    lineItemsQuery,
+  ]);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -293,6 +305,41 @@ router.get('/dashboard', async (req, res) => {
     .map(([name, value_usd]) => ({ name, value_usd: Math.round(value_usd) }))
     .sort((a, b) => b.value_usd - a.value_usd);
 
+  // ── MRR / ARR ──
+  // Normaliza cada línea de producto a un valor mensual según su frecuencia de
+  // facturación: mensual tal cual, anual /12, único no cuenta para MRR (es un pago que no
+  // se repite). Las líneas sin producto vinculado se asumen mensuales — mismo criterio que
+  // "WiFi Marketing" en /api/metrics/products, de ahí vienen casi todas.
+  // OJO: no hay seguimiento de cancelaciones/churn todavía, así que "MRR ganado" es en
+  // realidad la suma de todo lo vendido como recurrente históricamente, asumiendo que sigue
+  // activo — no un MRR verificado mes a mes.
+  const monthlyValue = (li) => {
+    const freq = li.products?.billing_frequency || 'mensual';
+    if (freq === 'unico') return 0;
+    const raw = toUsd(Number(li.quantity || 0) * Number(li.unit_price || 0), li.currency);
+    return freq === 'anual' ? raw / 12 : raw;
+  };
+
+  let mrrWon = 0, mrrPipeline = 0, mrrPipelineWeighted = 0;
+  (lineItems || []).forEach((li) => {
+    const status = li.deals?.status;
+    const m = monthlyValue(li);
+    if (status === 'ganado') mrrWon += m;
+    else if (status === 'abierto') {
+      mrrPipeline += m;
+      mrrPipelineWeighted += m * (Number(li.deals?.probability || 0) / 100);
+    }
+  });
+
+  const mrr_arr = {
+    mrr_won: Math.round(mrrWon),
+    arr_won: Math.round(mrrWon * 12),
+    mrr_pipeline: Math.round(mrrPipeline),
+    arr_pipeline: Math.round(mrrPipeline * 12),
+    mrr_pipeline_weighted: Math.round(mrrPipelineWeighted),
+    arr_pipeline_weighted: Math.round(mrrPipelineWeighted * 12),
+  };
+
   // ── Deals won over time: valor de deals ganados por mes de cierre ──
   const wonByMonth = {};
   months.forEach((m) => { wonByMonth[m] = 0; });
@@ -314,6 +361,7 @@ router.get('/dashboard', async (req, res) => {
     won_avg_value: { current: Math.round(avgThisYear), previous: Math.round(avgPrevYear), pct_change: pctChange, count: wonThisYear.length },
     sales_by_country,
     sales_by_facturacion,
+    mrr_arr,
     deals_won_by_month,
   });
 });
