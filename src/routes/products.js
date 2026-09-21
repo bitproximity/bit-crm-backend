@@ -5,7 +5,7 @@ const { requirePage } = require('../middleware/pagePermissions');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+router.use(requirePage('productos'));
 
 router.get('/', async (req, res) => {
   const { type, active } = req.query;

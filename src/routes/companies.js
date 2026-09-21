@@ -6,7 +6,7 @@ const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+router.use(requirePage('empresas'));
 
 router.get('/', async (req, res) => {
   const { search, page = 1, limit = 50 } = req.query;

@@ -2,8 +2,8 @@
 // Las páginas no listadas aquí para un rol quedan bloqueadas a nivel de API,
 // no solo ocultas en el menú — así nadie se lo salta llamando el endpoint directo.
 const ROLE_ALLOWED_PAGES = {
-  operaciones: ['deals', 'tasks', 'projects', 'spaces', 'documents', 'activities', 'contactos'],
-  outbound: ['b2b', 'tasks', 'projects', 'spaces', 'documents', 'activities', 'contactos'],
+  operaciones: ['deals', 'tasks', 'projects', 'spaces', 'documents', 'activities', 'contactos', 'empresas', 'productos'],
+  outbound: ['b2b', 'tasks', 'projects', 'spaces', 'documents', 'activities', 'contactos', 'empresas', 'productos'],
 };
 
 function requirePage(pageKey) {
