@@ -186,7 +186,7 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, created_at, closed_at, lost_reason, facturacion, companies(country)');
+    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, hardware_type, created_at, closed_at, lost_reason, facturacion, companies(country)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
   const [{ data: deals, error }, { data: rates }] = await Promise.all([
@@ -331,6 +331,36 @@ router.get('/dashboard', async (req, res) => {
     arr_pipeline_weighted: Math.round(mrrPipelineWeighted * 12),
   };
 
+  // ── Hardware: ventas ganadas y pipeline abierto, agrupado por tipo de hardware ──
+  // Usa deals.hardware_type (campo del trato, opciones según pipeline — ver
+  // hardwareOptionsForPipeline en el frontend). "Sin especificar" agrupa los tratos que
+  // no lo tienen cargado — con un pipeline puntual elegido (ej. Bit WiFi) esto da el
+  // ranking real de qué marca de equipo se vende más; con "Todos los pipelines" mezcla
+  // hardware de líneas de negocio distintas, útil solo para ver el total general.
+  const hardwareStats = {};
+  (deals || []).forEach((d) => {
+    if (d.status !== 'ganado' && d.status !== 'abierto') return;
+    const key = d.hardware_type?.trim() || 'Sin especificar';
+    if (!hardwareStats[key]) hardwareStats[key] = { won_value_usd: 0, won_count: 0, pipeline_value_usd: 0, pipeline_count: 0 };
+    const usd = toUsd(d.value, d.currency);
+    if (d.status === 'ganado') {
+      hardwareStats[key].won_value_usd += usd;
+      hardwareStats[key].won_count += 1;
+    } else {
+      hardwareStats[key].pipeline_value_usd += usd;
+      hardwareStats[key].pipeline_count += 1;
+    }
+  });
+  const hardware_insights = Object.entries(hardwareStats)
+    .map(([name, s]) => ({
+      name,
+      won_value_usd: Math.round(s.won_value_usd),
+      won_count: s.won_count,
+      pipeline_value_usd: Math.round(s.pipeline_value_usd),
+      pipeline_count: s.pipeline_count,
+    }))
+    .sort((a, b) => b.won_value_usd - a.won_value_usd);
+
   // ── Deals won over time: valor de deals ganados por mes de cierre ──
   const wonByMonth = {};
   months.forEach((m) => { wonByMonth[m] = 0; });
@@ -353,6 +383,7 @@ router.get('/dashboard', async (req, res) => {
     sales_by_country,
     sales_by_facturacion,
     mrr_arr,
+    hardware_insights,
     deals_won_by_month,
   });
 });
