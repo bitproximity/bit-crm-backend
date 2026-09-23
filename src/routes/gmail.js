@@ -148,13 +148,18 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
   const clients = await getAllGmailClientsForUser(req.teamMember.id);
   if (clients.length === 0) return res.status(400).json({ error: 'No has conectado tu Gmail todavía' });
 
-  try {
-    const saved = [];
+  const saved = [];
+  const staleAccounts = [];
 
-    // Busca en TODAS las cuentas conectadas (ej. si el contacto te escribió tanto a tu
-    // correo de Bit Proximity como al de Bit WiFi) — se deduplica solo porque
-    // gmail_message_id es único entre cuentas distintas de Google.
-    for (const { gmail } of clients) {
+  // Busca en TODAS las cuentas conectadas (ej. si el contacto te escribió tanto a tu
+  // correo de Bit Proximity como al de Bit WiFi) — se deduplica solo porque
+  // gmail_message_id es único entre cuentas distintas de Google.
+  // Cada cuenta se intenta por separado: si UNA falla (ej. token vencido — Google
+  // devuelve "invalid_grant" y pasa solo con apps en modo "Testing" si la cuenta lleva
+  // más de 7 días sin reconectarse), antes esto tumbaba la sincronización ENTERA, ni
+  // siquiera se intentaba con las demás cuentas que sí funcionan.
+  for (const { email: connEmail, gmail } of clients) {
+    try {
       const { data: list } = await gmail.users.messages.list({
         userId: 'me',
         q: `from:${email} OR to:${email}`,
@@ -216,13 +221,30 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
           console.error('Error sincronizando un mensaje puntual:', m.id, msgErr.message);
         }
       }
+    } catch (accountErr) {
+      const isInvalidGrant = /invalid_grant/i.test(accountErr.message || '');
+      if (isInvalidGrant) {
+        // Token muerto de verdad (no se puede refrescar solo) — se borra la conexión
+        // para que "Mi Perfil" ya no la muestre como conectada, y para que la próxima
+        // sincronización no la vuelva a intentar en vano.
+        await supabase.from('gmail_connections').delete().eq('team_member_id', req.teamMember.id).eq('email', connEmail);
+        staleAccounts.push(connEmail);
+      } else {
+        console.error(`Error sincronizando la cuenta ${connEmail}:`, accountErr.message);
+      }
     }
-
-    res.json(saved);
-  } catch (err) {
-    console.error('Error sincronizando Gmail:', err);
-    res.status(500).json({ error: `Error consultando Gmail: ${err.message}` });
   }
+
+  if (staleAccounts.length && saved.length === 0 && staleAccounts.length === clients.length) {
+    // Todas las cuentas conectadas fallaron por token vencido — ahí sí hay que avisar
+    // como error, porque no se sincronizó nada.
+    return res.status(400).json({
+      error: `Tu conexión con Gmail (${staleAccounts.join(', ')}) venció — reconéctala en Mi Perfil.`,
+      stale_accounts: staleAccounts,
+    });
+  }
+
+  res.json({ messages: saved, stale_accounts: staleAccounts });
 });
 
 // GET /api/gmail/messages/:entity_type/:entity_id — correos ya sincronizados y guardados
