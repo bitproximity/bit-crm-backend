@@ -10,7 +10,7 @@ router.use(requireAuth);
 // etc.) parece tener su propio usuario — se soportan hasta 4 cuentas.
 // Doc: https://app.factureromovil.com/api/doc
 //   FACTUREROMOVIL_USERNAME_1 / FACTUREROMOVIL_PASSWORD_1 / FACTUREROMOVIL_NAME_1 (y _2, _3, _4)
-const BASE_URL = 'https://app.factureromovil.com';
+const BASE_URL = process.env.FACTUREROMOVIL_BASE_URL || 'https://app.factureromovil.com';
 
 function facturermovilAccountsFromEnv() {
   const accounts = [];
