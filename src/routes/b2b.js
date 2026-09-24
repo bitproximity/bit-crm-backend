@@ -82,12 +82,27 @@ async function getBitProspectTeam() {
 
 // GET /api/b2b/clients — empresas marcadas como clientes del servicio
 router.get('/clients', async (req, res) => {
-  const { data, error } = await supabase
+  // Igual que el blindaje que ya tiene deals.js: si un campo nuevo (ej. una migración
+  // que todavía no corrió) no existe en la tabla, antes esto tumbaba TODA la pantalla de
+  // Bit Prospect con un error crudo de Postgres, en vez de solo omitir ese campo puntual.
+  let { data, error } = await supabase
     .from('companies')
     .select('id, name, industry, country, b2b_share_token, b2b_order, b2b_meeting_target')
     .eq('is_b2b_client', true)
     .order('b2b_order', { ascending: true, nullsFirst: false })
     .order('name');
+
+  if (error && /column companies\.(\w+) does not exist/.test(error.message)) {
+    const missing = error.message.match(/column companies\.(\w+) does not exist/)[1];
+    console.warn(`GET /api/b2b/clients: falta la columna "${missing}" (¿migración sin correr?) — se reintenta sin ella.`);
+    ({ data, error } = await supabase
+      .from('companies')
+      .select('id, name, industry, country, b2b_share_token, b2b_order')
+      .eq('is_b2b_client', true)
+      .order('b2b_order', { ascending: true, nullsFirst: false })
+      .order('name'));
+  }
+
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
