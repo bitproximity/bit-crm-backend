@@ -74,6 +74,7 @@ app.use('/api/spaces', require('./routes/spaces'));
 app.use('/api/documents', require('./routes/documents'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/invoice-sync', require('./routes/invoiceSync'));
+app.use('/api/invoice-sync', require('./routes/facturermovilSync'));
 app.use('/api/deal-files', require('./routes/dealFiles'));
 app.use('/api/document-files', require('./routes/documentFiles'));
 app.use('/api/b2b', require('./routes/b2b'));
