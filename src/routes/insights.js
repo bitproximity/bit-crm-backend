@@ -186,7 +186,7 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, hardware_type, created_at, closed_at, lost_reason, facturacion, companies(country)');
+    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, hardware_type, created_at, closed_at, lost_reason, facturacion, companies(country), pipelines(name)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
   const [{ data: deals, error }, { data: rates }] = await Promise.all([
@@ -334,6 +334,38 @@ router.get('/dashboard', async (req, res) => {
     arr_pipeline_weighted: Math.round(mrrPipelineWeighted * 12),
   };
 
+  // ── MRR/ARR por país de facturación + pipeline asociado ──
+  // Cruza el campo Facturación del trato (país/entidad que factura, NO el país de la
+  // empresa) con el pipeline al que pertenece — mismo criterio de "cuenta si tiene
+  // frecuencia de facturación explícita" que el MRR/ARR general de arriba.
+  const mrrByCountryPipeline = {};
+  (deals || []).forEach((d) => {
+    if (d.status !== 'ganado' && d.status !== 'abierto') return;
+    const m = monthlyValue(d);
+    if (m <= 0) return;
+    const country = d.facturacion?.trim() || 'Sin especificar';
+    const pipeline = d.pipelines?.name || 'Sin pipeline';
+    const key = `${country}|||${pipeline}`;
+    if (!mrrByCountryPipeline[key]) {
+      mrrByCountryPipeline[key] = { country, pipeline, mrr_won: 0, arr_won: 0, mrr_pipeline: 0, arr_pipeline: 0 };
+    }
+    if (d.status === 'ganado') {
+      mrrByCountryPipeline[key].mrr_won += m;
+    } else {
+      mrrByCountryPipeline[key].mrr_pipeline += m;
+    }
+  });
+  const mrr_by_country_pipeline = Object.values(mrrByCountryPipeline)
+    .map((r) => ({
+      country: r.country,
+      pipeline: r.pipeline,
+      mrr_won: Math.round(r.mrr_won),
+      arr_won: Math.round(r.mrr_won * 12),
+      mrr_pipeline: Math.round(r.mrr_pipeline),
+      arr_pipeline: Math.round(r.mrr_pipeline * 12),
+    }))
+    .sort((a, b) => b.mrr_won - a.mrr_won);
+
   // ── Hardware: ventas ganadas y pipeline abierto, agrupado por tipo de hardware ──
   // Usa deals.hardware_type (campo del trato, opciones según pipeline — ver
   // hardwareOptionsForPipeline en el frontend). "Sin especificar" agrupa los tratos que
@@ -387,6 +419,7 @@ router.get('/dashboard', async (req, res) => {
     sales_by_facturacion,
     mrr_arr,
     hardware_insights,
+    mrr_by_country_pipeline,
     deals_won_by_month,
   });
 });
