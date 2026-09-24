@@ -11,7 +11,9 @@ router.use(requireAuth);
 // credenciales en variables de entorno de Railway — separadas de cualquier acceso que Claude
 // tenga en el chat, que no le sirve de nada al servidor una vez termina la conversación:
 //   STRIPE_SECRET_KEY   — Stripe Dashboard → Developers → API keys → Secret key
-//   ALEGRA_EMAIL / ALEGRA_TOKEN — Alegra → Configuración → Usuarios → API
+//   ALEGRA_EMAIL / ALEGRA_TOKEN — cuenta 1 de Alegra (ej. "BIT")
+//   ALEGRA_EMAIL_2 / ALEGRA_TOKEN_2 — cuenta 2, opcional (ej. la personal)
+//   *_ACCOUNT_NAME — nombre a mostrar para cada cuenta (default si no se define abajo)
 
 async function insertInvoiceTolerant(payload) {
   let body = { ...payload };
@@ -36,6 +38,7 @@ function stripeStatus(inv) {
 router.post('/stripe', requireRole('admin'), async (req, res) => {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return res.status(400).json({ error: 'Falta STRIPE_SECRET_KEY en las variables de entorno de Railway.' });
+  const accountName = process.env.STRIPE_ACCOUNT_NAME || 'Bit Proximity';
 
   try {
     let allInvoices = [];
@@ -70,7 +73,8 @@ router.post('/stripe', requireRole('admin'), async (req, res) => {
         status: stripeStatus(inv),
         issue_date: new Date(inv.created * 1000).toISOString().slice(0, 10),
         due_date: inv.due_date ? new Date(inv.due_date * 1000).toISOString().slice(0, 10) : new Date(inv.created * 1000).toISOString().slice(0, 10),
-        notes: `Importado de Stripe - ${name} (${email})`,
+        notes: `Importado de Stripe (${accountName}) - ${name} (${email})`,
+        source_account: accountName,
         external_source: 'stripe',
         external_id: inv.id,
         created_by: req.teamMember.id,
@@ -94,47 +98,85 @@ function alegraStatus(inv) {
   return 'pagada';
 }
 
+// Cada cuenta de Alegra configurada se sincroniza por separado — así una persona con 2
+// cuentas (ej. Mario: "BIT" y personal) trae las de ambas en un solo click, cada factura
+// etiquetada con de cuál vino, sin mezclarlas ni pisar la una a la otra (external_id es
+// el id de Alegra, que se repite entre cuentas distintas — por eso el external_source real
+// que se guarda incluye la cuenta, ej. "alegra:BIT", para que la deduplicación no confunda
+// la factura #1 de una cuenta con la #1 de la otra).
+function alegraAccountsFromEnv() {
+  const accounts = [];
+  if (process.env.ALEGRA_EMAIL && process.env.ALEGRA_TOKEN) {
+    accounts.push({
+      email: process.env.ALEGRA_EMAIL,
+      token: process.env.ALEGRA_TOKEN,
+      name: process.env.ALEGRA_ACCOUNT_NAME || 'Bit Proximity',
+    });
+  }
+  if (process.env.ALEGRA_EMAIL_2 && process.env.ALEGRA_TOKEN_2) {
+    accounts.push({
+      email: process.env.ALEGRA_EMAIL_2,
+      token: process.env.ALEGRA_TOKEN_2,
+      name: process.env.ALEGRA_ACCOUNT_NAME_2 || 'Cuenta 2',
+    });
+  }
+  return accounts;
+}
+
 router.post('/alegra', requireRole('admin'), async (req, res) => {
-  const email = process.env.ALEGRA_EMAIL;
-  const token = process.env.ALEGRA_TOKEN;
-  if (!email || !token) return res.status(400).json({ error: 'Falta ALEGRA_EMAIL / ALEGRA_TOKEN en las variables de entorno de Railway.' });
+  const accounts = alegraAccountsFromEnv();
+  if (accounts.length === 0) {
+    return res.status(400).json({ error: 'Falta ALEGRA_EMAIL / ALEGRA_TOKEN en las variables de entorno de Railway.' });
+  }
 
   try {
-    const auth = 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64');
-    let all = [];
-    for (let start = 0; start < 3000; start += 30) {
-      const r = await fetch(`https://api.alegra.com/api/v1/invoices?limit=30&start=${start}`, { headers: { Authorization: auth } });
-      const data = await r.json();
-      if (!r.ok) return res.status(400).json({ error: data.message || 'Error consultando Alegra' });
-      all = all.concat(data);
-      if (data.length < 30) break;
+    let totalCreated = 0, totalSkipped = 0, totalSeen = 0;
+    const perAccount = [];
+
+    for (const account of accounts) {
+      const auth = 'Basic ' + Buffer.from(`${account.email}:${account.token}`).toString('base64');
+      let all = [];
+      for (let start = 0; start < 3000; start += 30) {
+        const r = await fetch(`https://api.alegra.com/api/v1/invoices?limit=30&start=${start}`, { headers: { Authorization: auth } });
+        const data = await r.json();
+        if (!r.ok) return res.status(400).json({ error: `${account.name}: ${data.message || 'Error consultando Alegra'}` });
+        all = all.concat(data);
+        if (data.length < 30) break;
+      }
+
+      const sourceKey = `alegra:${account.name}`;
+      let created = 0, skipped = 0;
+      for (const inv of all) {
+        const { data: existing } = await supabase.from('invoices').select('id').eq('external_source', sourceKey).eq('external_id', String(inv.id)).maybeSingle();
+        if (existing) { skipped++; continue; }
+
+        const { error } = await insertInvoiceTolerant({
+          invoice_number: inv.numberTemplate?.fullNumber || inv.numberTemplate?.formattedNumber || String(inv.id),
+          currency: 'COP',
+          subtotal: Number(inv.subtotal || 0),
+          tax: Number(inv.tax || 0),
+          total: Number(inv.total || 0),
+          paid_amount: Number(inv.totalPaid || 0),
+          status: alegraStatus(inv),
+          issue_date: inv.date,
+          due_date: inv.dueDate || inv.date,
+          notes: `Importado de Alegra (${account.name}) - ${inv.client?.name || 'Sin nombre'}`,
+          source_account: account.name,
+          external_source: sourceKey,
+          external_id: String(inv.id),
+          created_by: req.teamMember.id,
+        });
+        if (!error) created++;
+      }
+
+      perAccount.push({ account: account.name, created, skipped, total_en_alegra: all.length });
+      totalCreated += created;
+      totalSkipped += skipped;
+      totalSeen += all.length;
     }
 
-    let created = 0, skipped = 0;
-    for (const inv of all) {
-      const { data: existing } = await supabase.from('invoices').select('id').eq('external_source', 'alegra').eq('external_id', String(inv.id)).maybeSingle();
-      if (existing) { skipped++; continue; }
-
-      const { error } = await insertInvoiceTolerant({
-        invoice_number: inv.numberTemplate?.fullNumber || inv.numberTemplate?.formattedNumber || String(inv.id),
-        currency: 'COP',
-        subtotal: Number(inv.subtotal || 0),
-        tax: Number(inv.tax || 0),
-        total: Number(inv.total || 0),
-        paid_amount: Number(inv.totalPaid || 0),
-        status: alegraStatus(inv),
-        issue_date: inv.date,
-        due_date: inv.dueDate || inv.date,
-        notes: `Importado de Alegra - ${inv.client?.name || 'Sin nombre'}`,
-        external_source: 'alegra',
-        external_id: String(inv.id),
-        created_by: req.teamMember.id,
-      });
-      if (!error) created++;
-    }
-
-    await logAudit('invoice_sync', null, 'alegra_sync', req.teamMember.id, { created, skipped });
-    res.json({ created, skipped, total_en_alegra: all.length });
+    await logAudit('invoice_sync', null, 'alegra_sync', req.teamMember.id, { created: totalCreated, skipped: totalSkipped, per_account: perAccount });
+    res.json({ created: totalCreated, skipped: totalSkipped, total_en_alegra: totalSeen, per_account: perAccount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
