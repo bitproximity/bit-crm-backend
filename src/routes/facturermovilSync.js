@@ -74,11 +74,11 @@ async function syncFacturermovil(actorId) {
     }
 
     let docs = [];
-    for (let page = 1; page <= 50; page++) {
-      const r = await fetch(`${BASE_URL}/api/documentos?limit=100&page=${page}`, { headers: { Authorization: `Bearer ${token}` } });
+    for (let offset = 0; offset <= 20000; offset += 100) {
+      const r = await fetch(`${BASE_URL}/api/documentos?limit=100&offset=${offset}`, { headers: { Authorization: `Bearer ${token}` } });
       const batch = await r.json();
       if (!r.ok || !Array.isArray(batch)) {
-        perAccount.push({ account: account.name, error: `Error consultando documentos (status ${r.status}, página ${page})` });
+        perAccount.push({ account: account.name, error: `Error consultando documentos (status ${r.status}, offset ${offset})` });
         docs = null;
         break;
       }
