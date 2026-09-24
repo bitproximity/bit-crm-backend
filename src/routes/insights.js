@@ -8,6 +8,23 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePage('metricas'));
 
+// Mismo criterio que metrics.js: wifi_partner solo ve Bit WiFi. Se fuerza pipeline_id acá
+// para las 3 rutas de este archivo (funnel, la de línea 50, y dashboard) en un solo lugar
+// en vez de repetirlo en cada una.
+let bitWifiPipelineIdCache = null;
+async function getBitWifiPipelineId() {
+  if (bitWifiPipelineIdCache) return bitWifiPipelineIdCache;
+  const { data } = await supabase.from('pipelines').select('id').eq('name', 'Bit WiFi').maybeSingle();
+  bitWifiPipelineIdCache = data?.id || null;
+  return bitWifiPipelineIdCache;
+}
+router.use(async (req, res, next) => {
+  if (req.teamMember?.role !== 'wifi_partner') return next();
+  const bitWifiId = await getBitWifiPipelineId();
+  if (bitWifiId) req.query.pipeline_id = bitWifiId;
+  next();
+});
+
 // GET /api/insights/funnel?pipeline_id=
 // Para cada etapa: cuántos deals llegaron a esa etapa o más adelante
 // (incluye ganados/perdidos según en qué etapa quedaron), sobre el total.

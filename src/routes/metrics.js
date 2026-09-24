@@ -7,8 +7,29 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePage('metricas'));
 
+// Socio externo (wifi_partner) solo ve las cifras de ingreso/deals de Bit WiFi — no el resto
+// de líneas de negocio. Tareas y proyectos NO se filtran acá: no están atados a un pipeline
+// en el modelo de datos, son vista operativa compartida (y Jorge ya tiene esas páginas
+// aparte, sin restricción, porque no hay forma limpia de "recortarlas" a una sola línea).
+let bitWifiPipelineIdCache = null;
+async function getBitWifiPipelineId() {
+  if (bitWifiPipelineIdCache) return bitWifiPipelineIdCache;
+  const { data } = await supabase.from('pipelines').select('id').eq('name', 'Bit WiFi').maybeSingle();
+  bitWifiPipelineIdCache = data?.id || null;
+  return bitWifiPipelineIdCache;
+}
+
 // GET /api/metrics — panorama completo para vistas de reporting
 router.get('/', async (req, res) => {
+  const bitWifiId = req.teamMember?.role === 'wifi_partner' ? await getBitWifiPipelineId() : null;
+
+  let dealsByStageQuery = supabase.from('deals').select('stage_id, value, currency, pipeline_stages(name)').eq('status', 'abierto');
+  let wonLostQuery = supabase.from('deals').select('status').in('status', ['ganado', 'perdido']);
+  if (bitWifiId) {
+    dealsByStageQuery = dealsByStageQuery.eq('pipeline_id', bitWifiId);
+    wonLostQuery = wonLostQuery.eq('pipeline_id', bitWifiId);
+  }
+
   const [
     { data: dealsByStage },
     { data: tasksByStatus },
@@ -16,10 +37,10 @@ router.get('/', async (req, res) => {
     { data: wonLost },
     { data: rates },
   ] = await Promise.all([
-    supabase.from('deals').select('stage_id, value, currency, pipeline_stages(name)').eq('status', 'abierto'),
+    dealsByStageQuery,
     supabase.from('tasks').select('status'),
     supabase.from('projects').select('id, name, status'),
-    supabase.from('deals').select('status').in('status', ['ganado', 'perdido']),
+    wonLostQuery,
     supabase.from('exchange_rates').select('*'),
   ]);
 
