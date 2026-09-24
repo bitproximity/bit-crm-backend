@@ -300,14 +300,17 @@ router.get('/dashboard', async (req, res) => {
   // Se basa en el campo "Frecuencia de facturación" del TRATO mismo (no del producto) —
   // más directo: quien cierra el trato sabe si el contrato se factura mensual o anual, sin
   // depender de que cada producto del catálogo esté bien clasificado.
-  // mensual: el valor del trato tal cual. anual: valor del trato /12. único: no cuenta
-  // para MRR (es un pago que no se repite).
+  // mensual: el valor del trato tal cual. anual: valor del trato /12. único o sin marcar:
+  // no cuenta para MRR — antes un trato SIN marcar caía por defecto en "mensual", lo que
+  // inflaba el número con tratos únicos (venta de hardware, setup) y con tratos importados
+  // que nunca se revisaron uno por uno. Ahora "sin marcar" se trata igual que "único": no
+  // cuenta, hasta que alguien lo etiquete a mano con la frecuencia real.
   // OJO: no hay seguimiento de cancelaciones/churn todavía, así que "MRR ganado" es en
   // realidad la suma de todo lo vendido como recurrente históricamente, asumiendo que sigue
   // activo — no un MRR verificado mes a mes.
   const monthlyValue = (d) => {
-    const freq = d.billing_frequency || 'mensual';
-    if (freq === 'unico') return 0;
+    const freq = d.billing_frequency;
+    if (freq !== 'mensual' && freq !== 'anual') return 0;
     const raw = toUsd(d.value, d.currency);
     return freq === 'anual' ? raw / 12 : raw;
   };
