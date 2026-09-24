@@ -84,7 +84,7 @@ async function getBitProspectTeam() {
 router.get('/clients', async (req, res) => {
   const { data, error } = await supabase
     .from('companies')
-    .select('id, name, industry, country, b2b_share_token, b2b_order')
+    .select('id, name, industry, country, b2b_share_token, b2b_order, b2b_meeting_target')
     .eq('is_b2b_client', true)
     .order('b2b_order', { ascending: true, nullsFirst: false })
     .order('name');

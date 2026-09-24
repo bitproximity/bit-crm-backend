@@ -148,6 +148,7 @@ function computeB2bDashboard(records, teamMembers = []) {
     total_reactivations: reactivated.length,
     conversion_rate: conversionRate,
     meetings_this_month: byMonth[thisMonthKey] || 0,
+    meetings_this_month_realized: byMonthRealized[thisMonthKey] || 0,
     by_industry: Object.entries(byIndustry).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_position: groupSimilarText(meetings.map((r) => r.target_position)),
     by_commercial: groupSimilarText(meetings.map((r) => r.commercial)),
