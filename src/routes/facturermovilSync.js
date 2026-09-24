@@ -73,12 +73,19 @@ async function syncFacturermovil(actorId) {
       continue;
     }
 
-    const r = await fetch(`${BASE_URL}/api/documentos`, { headers: { Authorization: `Bearer ${token}` } });
-    const docs = await r.json();
-    if (!r.ok || !Array.isArray(docs)) {
-      perAccount.push({ account: account.name, error: `Error consultando documentos (status ${r.status})` });
-      continue;
+    let docs = [];
+    for (let page = 1; page <= 50; page++) {
+      const r = await fetch(`${BASE_URL}/api/documentos?limit=100&page=${page}`, { headers: { Authorization: `Bearer ${token}` } });
+      const batch = await r.json();
+      if (!r.ok || !Array.isArray(batch)) {
+        perAccount.push({ account: account.name, error: `Error consultando documentos (status ${r.status}, página ${page})` });
+        docs = null;
+        break;
+      }
+      docs = docs.concat(batch);
+      if (batch.length < 100) break; // última página
     }
+    if (!docs) continue;
 
     const sourceKey = `facturero_movil:${account.name}`;
     let created = 0, skipped = 0, fuera_de_rango = 0;
@@ -137,25 +144,19 @@ router.get('/facturero-movil/preview', requireRole('admin'), async (req, res) =>
   for (const account of accounts) {
     try {
       const token = await loginFacturermovil(account.username, account.password);
-      // Probamos varias formas comunes de paginar para ver cuál reconoce la API — 5
-      // documentos por cuenta es sospechosamente redondo, huele a límite de página
-      // implícito, no al total real.
       const urls = {
-        sin_parametros: `${BASE_URL}/api/documentos`,
-        page2: `${BASE_URL}/api/documentos?page=2`,
-        itemsPerPage_1000: `${BASE_URL}/api/documentos?itemsPerPage=1000`,
-        limit_1000: `${BASE_URL}/api/documentos?limit=1000`,
+        limit100_page1: `${BASE_URL}/api/documentos?limit=100&page=1`,
+        limit100_page2: `${BASE_URL}/api/documentos?limit=100&page=2`,
       };
       const results = {};
       for (const [label, url] of Object.entries(urls)) {
         const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         const data = await r.json().catch(() => null);
-        const headersObj = {};
-        r.headers.forEach((v, k) => { headersObj[k] = v; });
         results[label] = {
           status: r.status,
           count: Array.isArray(data) ? data.length : null,
-          headers_relevantes: { link: headersObj.link, 'x-total-count': headersObj['x-total-count'], 'x-pagination': headersObj['x-pagination'] },
+          primer_id: Array.isArray(data) && data[0] ? data[0].id : null,
+          ultimo_id: Array.isArray(data) && data.length ? data[data.length - 1].id : null,
         };
       }
       preview.push({ account: account.name, login_ok: true, resultados: results });
