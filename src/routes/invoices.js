@@ -66,17 +66,31 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/invoices  { deal_id?, company_id?, contact_id?, currency, due_date?, notes?, line_items: [{product_id?, description, quantity, unit_price}], tax? }
+// Si un campo nuevo (ej. external_source/external_id de una migración que Mario todavía no
+// corrió) no existe en la tabla, antes esto tumbaba la creación ENTERA de la factura. Mismo
+// blindaje que ya tienen deals.js y b2b.js: se detecta, se saca ese campo puntual, se reintenta.
+async function insertInvoiceTolerant(payload) {
+  let body = { ...payload };
+  const skipped = [];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const result = await supabase.from('invoices').insert(body).select().single();
+    if (!result.error) return { ...result, skipped };
+    const match = /column "?(\w+)"? of relation "invoices" does not exist|Could not find the '(\w+)' column/.exec(result.error.message || '');
+    const col = match?.[1] || match?.[2];
+    if (!col || !(col in body)) return result;
+    skipped.push(col);
+    delete body[col];
+  }
+  return { error: { message: 'No se pudo guardar la factura después de varios intentos.' } };
+}
+
 router.post('/', async (req, res) => {
   const { line_items = [], tax = 0, ...invoiceFields } = req.body;
 
   const subtotal = line_items.reduce((sum, li) => sum + Number(li.quantity || 1) * Number(li.unit_price || 0), 0);
   const total = subtotal + Number(tax || 0);
 
-  const { data: invoice, error } = await supabase
-    .from('invoices')
-    .insert({ ...invoiceFields, subtotal, tax, total, created_by: req.teamMember.id })
-    .select()
-    .single();
+  const { data: invoice, error } = await insertInvoiceTolerant({ ...invoiceFields, subtotal, tax, total, created_by: req.teamMember.id });
 
   if (error) return res.status(400).json({ error: error.message });
 
