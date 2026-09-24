@@ -145,8 +145,10 @@ router.get('/facturero-movil/preview', requireRole('admin'), async (req, res) =>
     try {
       const token = await loginFacturermovil(account.username, account.password);
       const urls = {
-        limit100_page1: `${BASE_URL}/api/documentos?limit=100&page=1`,
-        limit100_page2: `${BASE_URL}/api/documentos?limit=100&page=2`,
+        limit100_offset0: `${BASE_URL}/api/documentos?limit=100&offset=0`,
+        limit100_offset100: `${BASE_URL}/api/documentos?limit=100&offset=100`,
+        limit100_start100: `${BASE_URL}/api/documentos?limit=100&start=100`,
+        limit100_skip100: `${BASE_URL}/api/documentos?limit=100&skip=100`,
       };
       const results = {};
       for (const [label, url] of Object.entries(urls)) {
