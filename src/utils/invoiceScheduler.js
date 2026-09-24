@@ -1,4 +1,5 @@
 const { syncStripe, syncAlegra } = require('../routes/invoiceSync');
+const { syncFacturermovil } = require('../routes/facturermovilSync');
 const supabase = require('../config/supabase');
 
 // Corre la sincronización de facturas SOLA cada cierto tiempo — Mario ya no necesita
@@ -35,11 +36,13 @@ function startInvoiceScheduler() {
   setTimeout(() => {
     runOnce('Stripe', syncStripe);
     runOnce('Alegra', syncAlegra);
+    runOnce('Facturero Movil', syncFacturermovil);
   }, 10_000); // 10s de margen para que el server termine de levantar
 
   setInterval(() => {
     runOnce('Stripe', syncStripe);
     runOnce('Alegra', syncAlegra);
+    runOnce('Facturero Movil', syncFacturermovil);
   }, INTERVAL_MS);
 
   console.log(`[invoice-scheduler] activo — sincroniza Stripe y Alegra cada ${INTERVAL_MS / 60000} minutos`);
