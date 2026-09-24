@@ -112,6 +112,54 @@ async function getAllGmailClientsForUser(teamMemberId) {
   });
 }
 
+// Recorre el árbol de "parts" de un mensaje buscando adjuntos reales (tienen filename +
+// body.attachmentId) — puede haber varios, y pueden estar anidados dentro de otro part.
+function findAttachmentParts(payload, found = []) {
+  if (!payload) return found;
+  if (payload.filename && payload.body?.attachmentId) found.push(payload);
+  (payload.parts || []).forEach((p) => findAttachmentParts(p, found));
+  return found;
+}
+
+// Descarga cada adjunto de un correo nuevo y lo guarda en deal_files (misma tabla y bucket
+// que "Añadir archivo" a mano en la pestaña Archivos del trato) — así las propuestas u otros
+// documentos que se mandaron por correo quedan también en el CRM, sin que nadie tenga que
+// subirlos aparte.
+const DEAL_FILES_BUCKET = 'deal-files';
+async function syncAttachments(gmail, messageId, payload, dealId, teamMemberId) {
+  const parts = findAttachmentParts(payload);
+  for (const part of parts) {
+    try {
+      const { data: att } = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId,
+        id: part.body.attachmentId,
+      });
+      const buffer = Buffer.from(att.data, 'base64');
+      const safeName = part.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${dealId}/${Date.now()}-${safeName}`;
+
+      const { error: uploadError } = await supabase.storage.from(DEAL_FILES_BUCKET).upload(path, buffer, {
+        contentType: part.mimeType || 'application/octet-stream',
+        upsert: false,
+      });
+      if (uploadError) continue;
+
+      await supabase.from('deal_files').insert({
+        deal_id: dealId,
+        file_name: part.filename,
+        file_path: path,
+        file_size: buffer.length,
+        mime_type: part.mimeType || null,
+        uploaded_by: teamMemberId,
+        gmail_message_id: messageId,
+      });
+    } catch (attErr) {
+      console.error('Error guardando adjunto de correo:', part.filename, attErr.message);
+    }
+  }
+}
+
 // Extrae el cuerpo (texto plano y HTML) del payload de un mensaje de Gmail — los mensajes
 // vienen como un árbol de "parts" anidado (texto y HTML como hermanos, y a veces todo
 // envuelto en un part "multipart/*" sin contenido propio), así que hay que recorrerlo.
@@ -170,6 +218,11 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
       for (const m of messages) {
         try {
+          // Si el mensaje YA existía (sincronizaciones anteriores), no reprocesamos sus
+          // adjuntos de nuevo — si no, cada corrida del sync duplicaría los mismos archivos
+          // en Documentos.
+          const { data: already } = await supabase.from('gmail_messages').select('id').eq('gmail_message_id', m.id).maybeSingle();
+
           // format: 'full' en vez de 'metadata' — antes solo se guardaba snippet (el
           // fragmento corto de preview de Gmail), no el correo completo.
           const { data: full } = await gmail.users.messages.get({
@@ -215,6 +268,13 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
           if (upsertError) continue;
           saved.push(row);
+
+          // Adjuntos → Documentos (pestaña "Archivos" del trato), incluidas propuestas que
+          // se mandaron por correo — solo para tratos (no hay tabla de archivos por contacto
+          // todavía) y solo en mensajes nuevos.
+          if (!already && entity_type === 'deal') {
+            await syncAttachments(gmail, m.id, full.payload, entity_id, req.teamMember.id);
+          }
         } catch (msgErr) {
           // Un mensaje individual que falle (borrado en Gmail, formato inesperado, etc.)
           // no debe tumbar el resto de la sincronización.
