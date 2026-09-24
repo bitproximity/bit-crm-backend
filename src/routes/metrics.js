@@ -5,7 +5,7 @@ const { requirePage } = require('../middleware/pagePermissions');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+router.use(requirePage('metricas'));
 
 // GET /api/metrics — panorama completo para vistas de reporting
 router.get('/', async (req, res) => {

@@ -9,6 +9,40 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePage('deals'));
 
+// Bloqueo por PIPELINE para el rol "wifi_partner" (socio externo, ej. Bit WiFi) — no basta
+// con bloquear la página, alguien con este rol no debe poder ver ni tocar tratos de otros
+// pipelines llamando la API directo. Se resuelve el pipeline por NOMBRE (no un id fijo en el
+// código) para no romperse si algún día se recrea. GET '/' fuerza el filtro; POST '/' fuerza
+// el pipeline al crear; :id (y sus sub-rutas win/lose/reopen/stage/line-items) verifican que
+// el trato pertenezca a ese pipeline antes de dejar pasar.
+let bitWifiPipelineIdCache = null;
+async function getBitWifiPipelineId() {
+  if (bitWifiPipelineIdCache) return bitWifiPipelineIdCache;
+  const { data } = await supabase.from('pipelines').select('id').eq('name', 'Bit WiFi').maybeSingle();
+  bitWifiPipelineIdCache = data?.id || null;
+  return bitWifiPipelineIdCache;
+}
+
+router.use(async (req, res, next) => {
+  if (req.teamMember?.role !== 'wifi_partner') return next();
+  const bitWifiId = await getBitWifiPipelineId();
+  if (!bitWifiId) return res.status(500).json({ error: 'No se encontró el pipeline Bit WiFi.' });
+  req.wifiPartnerPipelineId = bitWifiId;
+  if (req.method === 'GET' && req.path === '/') req.query.pipeline_id = bitWifiId;
+  if (req.method === 'POST' && req.path === '/') req.body.pipeline_id = bitWifiId;
+  if (req.method === 'POST' && req.path === '/import') return res.status(403).json({ error: 'Tu rol no puede importar tratos.' });
+  next();
+});
+
+router.param('id', async (req, res, next, id) => {
+  if (req.teamMember?.role !== 'wifi_partner') return next();
+  const { data: deal } = await supabase.from('deals').select('pipeline_id').eq('id', id).maybeSingle();
+  if (!deal || deal.pipeline_id !== req.wifiPartnerPipelineId) {
+    return res.status(403).json({ error: 'No tienes acceso a este trato.' });
+  }
+  next();
+});
+
 // GET /api/deals?pipeline_id=&owner_id=&status=&stage_id=&lost_reason=&created_month=YYYY-MM&closed_month=YYYY-MM
 router.get('/', async (req, res) => {
   const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month, country, facturacion, hardware_type, search, limit } = req.query;

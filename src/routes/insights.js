@@ -6,7 +6,7 @@ const { resolveDealCountry } = require('../utils/pipelineCountry');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+router.use(requirePage('metricas'));
 
 // GET /api/insights/funnel?pipeline_id=
 // Para cada etapa: cuántos deals llegaron a esa etapa o más adelante

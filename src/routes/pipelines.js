@@ -16,7 +16,13 @@ router.get('/', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   pipelines.forEach((p) => p.pipeline_stages.sort((a, b) => a.position - b.position));
-  res.json(pipelines);
+  // Socio externo restringido a Bit WiFi — no le mostramos ni los nombres de los demás
+  // pipelines (el bloqueo real de datos vive en deals.js, esto es solo para no confundir
+  // el selector del Pipeline con opciones que de todas formas le van a devolver vacío).
+  const visible = req.teamMember?.role === 'wifi_partner'
+    ? pipelines.filter((p) => p.name === 'Bit WiFi')
+    : pipelines;
+  res.json(visible);
 });
 
 // POST /api/pipelines — crear pipeline nuevo (solo admin)

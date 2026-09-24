@@ -4,6 +4,11 @@
 const ROLE_ALLOWED_PAGES = {
   operaciones: ['deals', 'tasks', 'projects', 'spaces', 'documents', 'activities', 'contactos', 'empresas', 'productos'],
   outbound: ['b2b', 'tasks', 'projects', 'spaces', 'documents', 'activities', 'contactos', 'empresas', 'productos'],
+  // Socio externo (ej. Bit WiFi) — ve tratos PERO SOLO del pipeline "Bit WiFi" (bloqueado a
+  // nivel de datos en deals.js, no solo de página, para que no pueda ver otros pipelines
+  // llamando la API directo), más empresas/contactos/métricas/tareas/espacios/proyectos/
+  // documentos. Sin acceso a Bit Prospect, Productos, Facturación ni Forecast.
+  wifi_partner: ['deals', 'contactos', 'empresas', 'metricas', 'tasks', 'projects', 'spaces', 'documents'],
 };
 
 function requirePage(pageKey) {
