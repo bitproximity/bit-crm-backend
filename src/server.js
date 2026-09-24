@@ -63,6 +63,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/custom-fields', require('./routes/customFields'));
 app.use('/api/exchange-rates', require('./routes/exchangeRates'));
 app.use('/api/gmail', require('./routes/gmail'));
+app.use('/api/drive', require('./routes/drive'));
 app.use('/api/products', require('./routes/products'));
 app.use('/api/forecast', require('./routes/forecast'));
 app.use('/api/metrics', require('./routes/metrics'));
