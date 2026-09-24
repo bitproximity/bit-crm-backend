@@ -137,9 +137,28 @@ router.get('/facturero-movil/preview', requireRole('admin'), async (req, res) =>
   for (const account of accounts) {
     try {
       const token = await loginFacturermovil(account.username, account.password);
-      const r = await fetch(`${BASE_URL}/api/documentos`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await r.json();
-      preview.push({ account: account.name, login_ok: true, status: r.status, count: Array.isArray(data) ? data.length : null, sample: Array.isArray(data) ? data.slice(0, 2) : data });
+      // Probamos varias formas comunes de paginar para ver cuál reconoce la API — 5
+      // documentos por cuenta es sospechosamente redondo, huele a límite de página
+      // implícito, no al total real.
+      const urls = {
+        sin_parametros: `${BASE_URL}/api/documentos`,
+        page2: `${BASE_URL}/api/documentos?page=2`,
+        itemsPerPage_1000: `${BASE_URL}/api/documentos?itemsPerPage=1000`,
+        limit_1000: `${BASE_URL}/api/documentos?limit=1000`,
+      };
+      const results = {};
+      for (const [label, url] of Object.entries(urls)) {
+        const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await r.json().catch(() => null);
+        const headersObj = {};
+        r.headers.forEach((v, k) => { headersObj[k] = v; });
+        results[label] = {
+          status: r.status,
+          count: Array.isArray(data) ? data.length : null,
+          headers_relevantes: { link: headersObj.link, 'x-total-count': headersObj['x-total-count'], 'x-pagination': headersObj['x-pagination'] },
+        };
+      }
+      preview.push({ account: account.name, login_ok: true, resultados: results });
     } catch (err) {
       preview.push({ account: account.name, error: err.message });
     }
