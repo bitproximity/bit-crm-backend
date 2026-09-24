@@ -167,5 +167,45 @@ router.get('/facturero-movil/preview', requireRole('admin'), async (req, res) =>
   res.json(preview);
 });
 
+// GET /api/invoice-sync/facturero-movil/paginate-test — prueba varias convenciones de
+// paginación contra la primera cuenta configurada, para averiguar cuál usa esta API real
+// (la doc pública no lo dice) antes de asumir una y traer datos incompletos.
+router.get('/facturero-movil/paginate-test', requireRole('admin'), async (req, res) => {
+  const accounts = facturermovilAccountsFromEnv();
+  if (accounts.length === 0) return res.status(400).json({ error: 'Sin cuentas configuradas.' });
+  const account = accounts[0];
+
+  let token;
+  try {
+    token = await loginFacturermovil(account.username, account.password);
+  } catch (err) {
+    return res.status(400).json({ error: `Login: ${err.message}` });
+  }
+
+  const attempts = [
+    { label: 'sin parámetros', qs: '' },
+    { label: 'page=2', qs: '?page=2' },
+    { label: 'page=1&limit=100', qs: '?page=1&limit=100' },
+    { label: 'limit=1000', qs: '?limit=1000' },
+    { label: 'itemsPerPage=1000', qs: '?itemsPerPage=1000' },
+    { label: 'offset=5', qs: '?offset=5' },
+    { label: 'pageSize=1000', qs: '?pageSize=1000' },
+    { label: 'per_page=1000', qs: '?per_page=1000' },
+    { label: 'fechaInicio/fechaFin', qs: '?fechaInicio=2025-01-01&fechaFin=2026-12-31' },
+  ];
+
+  const results = [];
+  for (const attempt of attempts) {
+    try {
+      const r = await fetch(`${BASE_URL}/api/documentos${attempt.qs}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await r.json();
+      results.push({ intento: attempt.label, status: r.status, count: Array.isArray(data) ? data.length : null, primer_id: Array.isArray(data) && data[0] ? data[0].id : null, ultimo_id: Array.isArray(data) && data.length ? data[data.length - 1].id : null });
+    } catch (err) {
+      results.push({ intento: attempt.label, error: err.message });
+    }
+  }
+  res.json({ account: account.name, results });
+});
+
 module.exports = router;
 module.exports.syncFacturermovil = syncFacturermovil;
