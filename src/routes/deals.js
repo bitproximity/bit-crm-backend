@@ -504,6 +504,37 @@ router.post('/import', async (req, res) => {
 // ── LÍNEAS DE PRODUCTO DEL DEAL ──────────────────────────────
 
 // GET /api/deals/:id/line-items
+// GET /api/deals/:id/contacts — personas adicionales del trato, además del contacto
+// principal (deals.contact_id) — ej. cuando hay varios interlocutores del lado del cliente.
+router.get('/:id/contacts', async (req, res) => {
+  const { data, error } = await supabase
+    .from('deal_contacts')
+    .select('id, role, contacts(id, first_name, last_name, email, phone, position)')
+    .eq('deal_id', req.params.id)
+    .order('created_at');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+router.post('/:id/contacts', async (req, res) => {
+  const { contact_id, role } = req.body;
+  if (!contact_id) return res.status(400).json({ error: 'Falta contact_id' });
+
+  const { data, error } = await supabase
+    .from('deal_contacts')
+    .insert({ deal_id: req.params.id, contact_id, role: role || null })
+    .select('id, role, contacts(id, first_name, last_name, email, phone, position)')
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+router.delete('/:id/contacts/:linkId', async (req, res) => {
+  const { error } = await supabase.from('deal_contacts').delete().eq('id', req.params.linkId).eq('deal_id', req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(204).end();
+});
+
 router.get('/:id/line-items', async (req, res) => {
   const { data, error } = await supabase
     .from('deal_line_items')
