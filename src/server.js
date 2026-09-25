@@ -112,3 +112,6 @@ app.listen(PORT, () => {
 
 const { startInvoiceScheduler } = require('./utils/invoiceScheduler');
 startInvoiceScheduler();
+
+const { startExchangeRateScheduler } = require('./utils/exchangeRateScheduler');
+startExchangeRateScheduler();
