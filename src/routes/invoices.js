@@ -50,8 +50,19 @@ router.get('/', async (req, res) => {
 
 // GET /api/invoices/summary — totales para las tarjetas de resumen
 router.get('/summary', async (req, res) => {
+  const { year, month, source_account } = req.query;
+  let invoicesQuery = supabase.from('invoices').select('total, paid_amount, status, due_date, issue_date, currency, source_account, client_name');
+  if (source_account) invoicesQuery = invoicesQuery.eq('source_account', source_account);
+  if (month) {
+    const [y, m] = month.split('-').map(Number);
+    const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+    invoicesQuery = invoicesQuery.gte('issue_date', `${month}-01`).lt('issue_date', nextMonth);
+  } else if (year) {
+    invoicesQuery = invoicesQuery.gte('issue_date', `${year}-01-01`).lt('issue_date', `${Number(year) + 1}-01-01`);
+  }
+
   const [{ data, error }, { data: rates }] = await Promise.all([
-    supabase.from('invoices').select('total, paid_amount, status, due_date, issue_date, currency, source_account, client_name'),
+    invoicesQuery,
     supabase.from('exchange_rates').select('*'),
   ]);
   if (error) return res.status(500).json({ error: error.message });
