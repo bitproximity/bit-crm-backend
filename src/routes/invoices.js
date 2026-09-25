@@ -15,7 +15,7 @@ function withOverdueFlag(inv) {
 
 // GET /api/invoices?deal_id=&company_id=&status=
 router.get('/', async (req, res) => {
-  const { deal_id, company_id, status } = req.query;
+  const { deal_id, company_id, status, offset } = req.query;
 
   let query = supabase
     .from('invoices')
@@ -25,6 +25,10 @@ router.get('/', async (req, res) => {
   if (deal_id) query = query.eq('deal_id', deal_id);
   if (company_id) query = query.eq('company_id', company_id);
   if (status) query = query.eq('status', status);
+  // Supabase limita a 1000 filas por defecto sin avisar — con muchas fuentes sincronizadas
+  // (Stripe/Alegra/Facturero Móvil) ya se superó ese número, así que se pagina con offset.
+  const start = Number(offset) || 0;
+  query = query.range(start, start + 999);
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });

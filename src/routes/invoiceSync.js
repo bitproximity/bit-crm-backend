@@ -97,10 +97,10 @@ function alegraStatus(inv) {
 function alegraAccountsFromEnv() {
   const accounts = [];
   if (process.env.ALEGRA_EMAIL && process.env.ALEGRA_TOKEN) {
-    accounts.push({ email: process.env.ALEGRA_EMAIL, token: process.env.ALEGRA_TOKEN, name: process.env.ALEGRA_ACCOUNT_NAME || 'BitProximity LLC' });
+    accounts.push({ index: 1, email: process.env.ALEGRA_EMAIL, token: process.env.ALEGRA_TOKEN, name: process.env.ALEGRA_ACCOUNT_NAME || 'BitProximity LLC' });
   }
   if (process.env.ALEGRA_EMAIL_2 && process.env.ALEGRA_TOKEN_2) {
-    accounts.push({ email: process.env.ALEGRA_EMAIL_2, token: process.env.ALEGRA_TOKEN_2, name: process.env.ALEGRA_ACCOUNT_NAME_2 || 'Cuenta 2' });
+    accounts.push({ index: 2, email: process.env.ALEGRA_EMAIL_2, token: process.env.ALEGRA_TOKEN_2, name: process.env.ALEGRA_ACCOUNT_NAME_2 || 'Cuenta 2' });
   }
   return accounts;
 }
@@ -123,7 +123,7 @@ async function syncAlegra(actorId) {
       if (data.length < 30) break;
     }
 
-    const sourceKey = `alegra:${account.name}`;
+    const sourceKey = `alegra:${account.index}`;
     let created = 0, skipped = 0;
     for (const inv of all) {
       const { data: existing } = await supabase.from('invoices').select('id').eq('external_source', sourceKey).eq('external_id', String(inv.id)).maybeSingle();

@@ -27,7 +27,7 @@ function facturermovilAccountsFromEnv() {
     const username = process.env[`FACTUREROMOVIL_USERNAME_${i}`];
     const password = process.env[`FACTUREROMOVIL_PASSWORD_${i}`];
     const name = process.env[`FACTUREROMOVIL_NAME_${i}`];
-    if (username && password && name) accounts.push({ username, password, name });
+    if (username && password && name) accounts.push({ index: i, username, password, name });
   }
   return accounts;
 }
@@ -87,7 +87,7 @@ async function syncFacturermovil(actorId) {
     }
     if (!docs) continue;
 
-    const sourceKey = `facturero_movil:${account.name}`;
+    const sourceKey = `facturero_movil:${account.index}`;
     let created = 0, skipped = 0, fuera_de_rango = 0;
     for (const doc of docs) {
       if (doc.codigoSri !== '01') continue; // solo facturas — no notas de crédito/débito/retenciones
