@@ -20,7 +20,8 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('invoices')
     .select('*, deals(title), companies(name), contacts(first_name,last_name)')
-    .order('issue_date', { ascending: false });
+    .order('issue_date', { ascending: false })
+    .order('id', { ascending: true }); // desempate estable — sin esto, .range() puede repetir u omitir filas cuando muchas comparten la misma fecha
 
   if (deal_id) query = query.eq('deal_id', deal_id);
   if (company_id) query = query.eq('company_id', company_id);
