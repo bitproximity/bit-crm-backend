@@ -411,49 +411,58 @@ router.get('/contacts', async (req, res) => {
   }
 });
 
-// GET /api/gmail/calendar/events?days=14 — próximos eventos del calendario conectado
-// (cuenta "principal" — la primera conectada; con varias cuentas conectadas, Calendar
-// solo mira una para no mezclar eventos de dos calendarios distintos en una sola lista)
+// GET /api/gmail/calendar/events?days=14 — próximos eventos de TODAS las cuentas de Google
+// conectadas, mezclados en una sola lista por fecha — antes solo miraba la primera cuenta
+// conectada (gmail_connections ordenado por id, limit 1), así que si el evento vivía en la
+// segunda cuenta (ej. mario@bitwifiapp.com si mario@bitproximity.com se conectó primero)
+// nunca aparecía, sin importar cuál de las dos cuentas se mirara.
 router.get('/calendar/events', async (req, res) => {
   const days = Number(req.query.days) || 14;
 
-  const conn = await supabase
+  const { data: conns } = await supabase
     .from('gmail_connections')
     .select('*')
     .eq('team_member_id', req.teamMember.id)
-    .order('id', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .order('id', { ascending: true });
 
-  if (!conn.data) return res.status(400).json({ error: 'No has conectado tu cuenta de Google todavía' });
-
-  const client = getOAuthClient();
-  client.setCredentials({ refresh_token: conn.data.refresh_token });
-  const calendar = google.calendar({ version: 'v3', auth: client });
+  if (!conns || conns.length === 0) return res.status(400).json({ error: 'No has conectado tu cuenta de Google todavía' });
 
   try {
     const timeMin = new Date().toISOString();
     const timeMax = new Date(Date.now() + days * 86400000).toISOString();
 
-    const { data } = await calendar.events.list({
-      calendarId: 'primary',
-      timeMin,
-      timeMax,
-      singleEvents: true,
-      orderBy: 'startTime',
-      maxResults: 50,
-    });
+    let events = [];
+    for (const conn of conns) {
+      try {
+        const client = getOAuthClient();
+        client.setCredentials({ refresh_token: conn.refresh_token });
+        const calendar = google.calendar({ version: 'v3', auth: client });
 
-    const events = (data.items || []).map((e) => ({
-      id: e.id,
-      title: e.summary,
-      start: e.start?.dateTime || e.start?.date,
-      end: e.end?.dateTime || e.end?.date,
-      attendees: (e.attendees || []).map((a) => a.email),
-      location: e.location,
-      meetLink: e.hangoutLink,
-    }));
+        const { data } = await calendar.events.list({
+          calendarId: 'primary',
+          timeMin,
+          timeMax,
+          singleEvents: true,
+          orderBy: 'startTime',
+          maxResults: 50,
+        });
 
+        events = events.concat((data.items || []).map((e) => ({
+          id: e.id,
+          title: e.summary,
+          start: e.start?.dateTime || e.start?.date,
+          end: e.end?.dateTime || e.end?.date,
+          attendees: (e.attendees || []).map((a) => a.email),
+          location: e.location,
+          meetLink: e.hangoutLink,
+          account: conn.email,
+        })));
+      } catch (accountErr) {
+        console.error(`Error consultando el calendario de ${conn.email}:`, accountErr.message);
+      }
+    }
+
+    events.sort((a, b) => new Date(a.start) - new Date(b.start));
     res.json(events);
   } catch (err) {
     console.error('Error consultando Google Calendar:', err);
