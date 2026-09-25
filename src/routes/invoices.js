@@ -15,7 +15,7 @@ function withOverdueFlag(inv) {
 
 // GET /api/invoices?deal_id=&company_id=&status=
 router.get('/', async (req, res) => {
-  const { deal_id, company_id, status, offset } = req.query;
+  const { deal_id, company_id, status, offset, year, month, source_account } = req.query;
 
   let query = supabase
     .from('invoices')
@@ -26,6 +26,15 @@ router.get('/', async (req, res) => {
   if (deal_id) query = query.eq('deal_id', deal_id);
   if (company_id) query = query.eq('company_id', company_id);
   if (status) query = query.eq('status', status);
+  if (source_account) query = query.eq('source_account', source_account);
+  // month (YYYY-MM) es más específico que year (YYYY) — si vienen los dos, gana month.
+  if (month) {
+    const [y, m] = month.split('-').map(Number);
+    const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+    query = query.gte('issue_date', `${month}-01`).lt('issue_date', nextMonth);
+  } else if (year) {
+    query = query.gte('issue_date', `${year}-01-01`).lt('issue_date', `${Number(year) + 1}-01-01`);
+  }
   // Supabase limita a 1000 filas por defecto sin avisar — con muchas fuentes sincronizadas
   // (Stripe/Alegra/Facturero Móvil) ya se superó ese número, así que se pagina con offset.
   const start = Number(offset) || 0;
@@ -38,21 +47,78 @@ router.get('/', async (req, res) => {
 
 // GET /api/invoices/summary — totales para las tarjetas de resumen
 router.get('/summary', async (req, res) => {
-  const { data, error } = await supabase.from('invoices').select('total, paid_amount, status, due_date, currency');
+  const [{ data, error }, { data: rates }] = await Promise.all([
+    supabase.from('invoices').select('total, paid_amount, status, due_date, issue_date, currency, source_account, client_name'),
+    supabase.from('exchange_rates').select('*'),
+  ]);
   if (error) return res.status(500).json({ error: error.message });
+
+  // Todo se convierte a USD antes de sumar — antes se sumaban montos de monedas distintas
+  // (USD + COP) directo, lo que daba un total sin sentido real.
+  const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
+  const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
 
   const today = new Date().toISOString().slice(0, 10);
   const summary = { total_facturado: 0, total_cobrado: 0, total_pendiente: 0, total_vencido: 0, count: data.length };
 
+  // Por empresa/cuenta que facturó (BitProximity LLC, BIT Colombia SAS, Diana Sanchez, etc.)
+  const byAccount = {};
+  // Por mes de emisión (YYYY-MM), últimos 12 meses con datos
+  const byMonth = {};
+  // Antigüedad de cartera pendiente — cuántos días vencida, agrupado en tramos clásicos
+  const aging = { al_dia: 0, '1_30': 0, '31_60': 0, '61_90': 0, mas_90: 0 };
+
   data.forEach((inv) => {
-    summary.total_facturado += Number(inv.total || 0);
-    summary.total_cobrado += Number(inv.paid_amount || 0);
-    const pending = Number(inv.total || 0) - Number(inv.paid_amount || 0);
-    if (inv.status !== 'pagada' && inv.status !== 'cancelada') {
-      summary.total_pendiente += pending;
-      if (inv.due_date && inv.due_date < today) summary.total_vencido += pending;
+    const totalUsd = toUsd(inv.total, inv.currency);
+    const paidUsd = toUsd(inv.paid_amount, inv.currency);
+    const pendingUsd = totalUsd - paidUsd;
+    const isOpen = inv.status !== 'pagada' && inv.status !== 'cancelada';
+
+    summary.total_facturado += totalUsd;
+    summary.total_cobrado += paidUsd;
+
+    const accountKey = inv.source_account || 'Manual / sin origen';
+    if (!byAccount[accountKey]) byAccount[accountKey] = { facturado: 0, cobrado: 0, pendiente: 0 };
+    byAccount[accountKey].facturado += totalUsd;
+    byAccount[accountKey].cobrado += paidUsd;
+
+    if (inv.issue_date) {
+      const month = inv.issue_date.slice(0, 7);
+      if (!byMonth[month]) byMonth[month] = { facturado: 0, cobrado: 0 };
+      byMonth[month].facturado += totalUsd;
+      byMonth[month].cobrado += paidUsd;
+    }
+
+    if (isOpen) {
+      summary.total_pendiente += pendingUsd;
+      byAccount[accountKey].pendiente += pendingUsd;
+      if (inv.due_date && inv.due_date < today) {
+        summary.total_vencido += pendingUsd;
+        const daysLate = Math.floor((new Date(today) - new Date(inv.due_date)) / 86400000);
+        if (daysLate <= 30) aging['1_30'] += pendingUsd;
+        else if (daysLate <= 60) aging['31_60'] += pendingUsd;
+        else if (daysLate <= 90) aging['61_90'] += pendingUsd;
+        else aging.mas_90 += pendingUsd;
+      } else {
+        aging.al_dia += pendingUsd;
+      }
     }
   });
+
+  const round = (n) => Math.round(n * 100) / 100;
+  ['total_facturado', 'total_cobrado', 'total_pendiente', 'total_vencido'].forEach((k) => { summary[k] = round(summary[k]); });
+  Object.keys(aging).forEach((k) => { aging[k] = round(aging[k]); });
+
+  summary.by_account = Object.entries(byAccount)
+    .map(([name, v]) => ({ name, facturado: round(v.facturado), cobrado: round(v.cobrado), pendiente: round(v.pendiente) }))
+    .sort((a, b) => b.facturado - a.facturado);
+
+  summary.by_month = Object.entries(byMonth)
+    .map(([month, v]) => ({ month, facturado: round(v.facturado), cobrado: round(v.cobrado) }))
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .slice(-12);
+
+  summary.aging = aging;
 
   res.json(summary);
 });
