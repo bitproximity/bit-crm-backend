@@ -15,7 +15,7 @@ function withOverdueFlag(inv) {
 
 // GET /api/invoices?deal_id=&company_id=&status=
 router.get('/', async (req, res) => {
-  const { deal_id, company_id, status, offset, year, month, source_account } = req.query;
+  const { deal_id, company_id, status, offset, year, month, source_account, q } = req.query;
 
   let query = supabase
     .from('invoices')
@@ -27,6 +27,9 @@ router.get('/', async (req, res) => {
   if (company_id) query = query.eq('company_id', company_id);
   if (status) query = query.eq('status', status);
   if (source_account) query = query.eq('source_account', source_account);
+  // Búsqueda libre por razón social o número de factura — para revisar/confirmar rápido
+  // sin tener que acordarse del número exacto.
+  if (q) query = query.or(`client_name.ilike.%${q}%,invoice_number.ilike.%${q}%`);
   // month (YYYY-MM) es más específico que year (YYYY) — si vienen los dos, gana month.
   if (month) {
     const [y, m] = month.split('-').map(Number);
