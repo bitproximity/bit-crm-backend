@@ -109,6 +109,7 @@ async function syncFacturermovil(actorId) {
         issue_date: issueDate,
         due_date: issueDate,
         notes: `Importado de Facturero Móvil (${account.name}) - ${doc.razonSocial || 'Sin nombre'}`,
+        client_name: doc.razonSocial || null,
         source_account: account.name,
         external_source: sourceKey,
         external_id: String(doc.id),
