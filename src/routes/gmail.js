@@ -126,8 +126,32 @@ function findAttachmentParts(payload, found = []) {
 // documentos que se mandaron por correo quedan también en el CRM, sin que nadie tenga que
 // subirlos aparte.
 const DEAL_FILES_BUCKET = 'deal-files';
+// Guarda el registro del archivo con el mismo blindaje que ya usan invoices.js/deals.js —
+// si gmail_message_id no existe todavía (falta correr la migración 037), no debe tumbar el
+// guardado del archivo entero, solo ese campo puntual.
+async function insertDealFileTolerant(payload) {
+  let body = { ...payload };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await supabase.from('deal_files').insert(body);
+    if (!result.error) return result;
+    const match = /Could not find the '(\w+)' column/.exec(result.error.message || '');
+    if (!match || !(match[1] in body)) return result;
+    delete body[match[1]];
+  }
+  return { error: { message: 'No se pudo guardar el archivo.' } };
+}
+
+// Un part con filename + attachmentId puede ser un adjunto real O una imagen inline de
+// firma (logo, etc.) — Gmail marca esto en el header Content-Disposition. Si dice
+// "inline" lo saltamos; si dice "attachment" o no viene el header, lo tratamos como
+// adjunto real (mejor traer de más que perder una propuesta real).
+function isInlineImage(part) {
+  const disposition = (part.headers || []).find((h) => h.name.toLowerCase() === 'content-disposition');
+  return disposition && /inline/i.test(disposition.value || '');
+}
+
 async function syncAttachments(gmail, messageId, payload, dealId, teamMemberId) {
-  const parts = findAttachmentParts(payload);
+  const parts = findAttachmentParts(payload).filter((p) => !isInlineImage(p));
   for (const part of parts) {
     try {
       const { data: att } = await gmail.users.messages.attachments.get({
@@ -145,7 +169,7 @@ async function syncAttachments(gmail, messageId, payload, dealId, teamMemberId) 
       });
       if (uploadError) continue;
 
-      await supabase.from('deal_files').insert({
+      await insertDealFileTolerant({
         deal_id: dealId,
         file_name: part.filename,
         file_path: path,
@@ -218,11 +242,6 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
       for (const m of messages) {
         try {
-          // Si el mensaje YA existía (sincronizaciones anteriores), no reprocesamos sus
-          // adjuntos de nuevo — si no, cada corrida del sync duplicaría los mismos archivos
-          // en Documentos.
-          const { data: already } = await supabase.from('gmail_messages').select('id').eq('gmail_message_id', m.id).maybeSingle();
-
           // format: 'full' en vez de 'metadata' — antes solo se guardaba snippet (el
           // fragmento corto de preview de Gmail), no el correo completo.
           const { data: full } = await gmail.users.messages.get({
@@ -271,9 +290,15 @@ router.post('/sync/:entity_type/:entity_id', async (req, res) => {
 
           // Adjuntos → Documentos (pestaña "Archivos" del trato), incluidas propuestas que
           // se mandaron por correo — solo para tratos (no hay tabla de archivos por contacto
-          // todavía) y solo en mensajes nuevos.
-          if (!already && entity_type === 'deal') {
-            await syncAttachments(gmail, m.id, full.payload, entity_id, req.teamMember.id);
+          // todavía). Se revisa deal_files (no gmail_messages) para saber si ya se
+          // extrajeron los adjuntos de ESTE mensaje puntual — así los correos que ya
+          // estaban sincronizados de ANTES de que existiera esta función también los traen
+          // la primera vez que se corre después de este fix, no solo los mensajes nuevos.
+          if (entity_type === 'deal') {
+            const { data: alreadyExtracted } = await supabase.from('deal_files').select('id').eq('gmail_message_id', m.id).limit(1);
+            if (!alreadyExtracted || alreadyExtracted.length === 0) {
+              await syncAttachments(gmail, m.id, full.payload, entity_id, req.teamMember.id);
+            }
           }
         } catch (msgErr) {
           // Un mensaje individual que falle (borrado en Gmail, formato inesperado, etc.)
