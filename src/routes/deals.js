@@ -59,7 +59,8 @@ router.get('/', async (req, res) => {
     if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
     if (owner_id) query = query.eq('owner_id', owner_id);
     if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
-    if (facturacion) query = query.eq('facturacion', facturacion);
+    if (facturacion === '__sin_especificar__') query = query.is('facturacion', null);
+    else if (facturacion) query = query.eq('facturacion', facturacion);
     if (hardware_type) query = query.eq('hardware_type', hardware_type);
     if (search) query = query.ilike('title', `%${search}%`);
     let { data, error } = await query;
@@ -87,7 +88,8 @@ router.get('/', async (req, res) => {
     if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);
     if (owner_id) query = query.eq('owner_id', owner_id);
     if (status) query = status.includes(',') ? query.in('status', status.split(',')) : query.eq('status', status);
-    if (facturacion) query = query.eq('facturacion', facturacion);
+    if (facturacion === '__sin_especificar__') query = query.is('facturacion', null);
+    else if (facturacion) query = query.eq('facturacion', facturacion);
     if (hardware_type) query = query.eq('hardware_type', hardware_type);
     if (stage_id) query = query.eq('stage_id', stage_id);
     if (lost_reason) {
