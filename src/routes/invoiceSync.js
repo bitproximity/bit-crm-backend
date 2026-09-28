@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { canonicalAccountName } = require('../utils/accountNames');
 
 router.use(requireAuth);
 
@@ -38,7 +39,7 @@ function stripeStatus(inv) {
 async function syncStripe(actorId) {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return { error: 'Falta STRIPE_SECRET_KEY en las variables de entorno de Railway.' };
-  const accountName = process.env.STRIPE_ACCOUNT_NAME || 'BitProximity LLC';
+  const accountName = canonicalAccountName(process.env.STRIPE_ACCOUNT_NAME || 'BitProximity LLC');
 
   let allInvoices = [];
   let startingAfter;
@@ -98,10 +99,10 @@ function alegraStatus(inv) {
 function alegraAccountsFromEnv() {
   const accounts = [];
   if (process.env.ALEGRA_EMAIL && process.env.ALEGRA_TOKEN) {
-    accounts.push({ index: 1, email: process.env.ALEGRA_EMAIL, token: process.env.ALEGRA_TOKEN, name: process.env.ALEGRA_ACCOUNT_NAME || 'BitProximity LLC' });
+    accounts.push({ index: 1, email: process.env.ALEGRA_EMAIL, token: process.env.ALEGRA_TOKEN, name: canonicalAccountName(process.env.ALEGRA_ACCOUNT_NAME || 'BitProximity LLC') });
   }
   if (process.env.ALEGRA_EMAIL_2 && process.env.ALEGRA_TOKEN_2) {
-    accounts.push({ index: 2, email: process.env.ALEGRA_EMAIL_2, token: process.env.ALEGRA_TOKEN_2, name: process.env.ALEGRA_ACCOUNT_NAME_2 || 'Cuenta 2' });
+    accounts.push({ index: 2, email: process.env.ALEGRA_EMAIL_2, token: process.env.ALEGRA_TOKEN_2, name: canonicalAccountName(process.env.ALEGRA_ACCOUNT_NAME_2 || 'Cuenta 2') });
   }
   return accounts;
 }

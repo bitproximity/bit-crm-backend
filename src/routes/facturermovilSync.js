@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { canonicalAccountName } = require('../utils/accountNames');
 
 router.use(requireAuth);
 
@@ -27,7 +28,7 @@ function facturermovilAccountsFromEnv() {
     const username = process.env[`FACTUREROMOVIL_USERNAME_${i}`];
     const password = process.env[`FACTUREROMOVIL_PASSWORD_${i}`];
     const name = process.env[`FACTUREROMOVIL_NAME_${i}`];
-    if (username && password && name) accounts.push({ index: i, username, password, name });
+    if (username && password && name) accounts.push({ index: i, username, password, name: canonicalAccountName(name) });
   }
   return accounts;
 }
