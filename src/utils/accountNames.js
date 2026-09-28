@@ -8,15 +8,22 @@ const KNOWN_ACCOUNT_NAMES = [
   'Bit Colombia SAS',
   'BitProximity LLC',
   'Mario Colombia',
+  'Diana Sánchez',
   'Mario Ramos',
   'Bithub SRL',
   'Bit Paraguay EAS',
   'Bit México',
 ];
 
+// Compara sin mayúsculas, sin tildes y sin espacios de más: "Diana Sanchez", "DIANA SÁNCHEZ" y
+// "diana sánchez" son la misma empresa. (La variable de Railway de Facturero Móvil dice
+// "Diana Sanchez" sin tilde, y el desplegable de Facturación dice "Diana Sánchez": eran
+// dos filas distintas en "Facturado por empresa".)
+const normalize = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 function canonicalAccountName(name) {
-  const clean = String(name || '').trim();
-  const found = KNOWN_ACCOUNT_NAMES.find((k) => k.toLowerCase() === clean.toLowerCase());
+  const clean = String(name || '').trim().replace(/\s+/g, ' ');
+  const found = KNOWN_ACCOUNT_NAMES.find((k) => normalize(k) === normalize(clean));
   return found || clean;
 }
 
