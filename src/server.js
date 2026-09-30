@@ -52,6 +52,7 @@ app.use('/api/companies', require('./routes/companies'));
 app.use('/api/duplicates', require('./routes/duplicates'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/automation-rules', require('./routes/automationRules'));
+app.use('/api/quotas', require('./routes/quotas'));
 app.use('/api/pipelines', require('./routes/pipelines'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/enrichment', require('./routes/enrichment'));
