@@ -80,11 +80,18 @@ router.post('/:id/submit', async (req, res) => {
     if (dealErr) throw dealErr;
 
     if (message && message.trim()) {
-      await supabase.from('activities').insert({
-        entity_type: 'deal', entity_id: deal.id, type: 'nota',
-        title: 'Mensaje del formulario', summary: message.trim(),
-        author_id: null,
-      }).catch(() => {});
+      // No es una promesa nativa (es el query builder de Supabase) — .catch() encadenado
+      // directo falla con "is not a function". Si esto falla (ej. author_id no admite
+      // nulo), no debe tumbar el envío del formulario — el trato ya se creó, que es lo
+      // que importa — así que va en su propio try/catch.
+      try {
+        await supabase.from('activities').insert({
+          entity_type: 'deal', entity_id: deal.id, type: 'nota',
+          title: 'Mensaje del formulario', summary: message.trim(),
+        });
+      } catch (noteErr) {
+        console.error('[lead-forms] no se pudo guardar la nota del mensaje:', noteErr.message);
+      }
     }
 
     await supabase.from('lead_forms').update({ submissions_count: (form.submissions_count || 0) + 1 }).eq('id', form.id);
