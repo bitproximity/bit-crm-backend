@@ -51,6 +51,7 @@ app.use('/api/contacts', require('./routes/contacts'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/duplicates', require('./routes/duplicates'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/automation-rules', require('./routes/automationRules'));
 app.use('/api/pipelines', require('./routes/pipelines'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/enrichment', require('./routes/enrichment'));
@@ -119,3 +120,6 @@ startInvoiceScheduler();
 
 const { startExchangeRateScheduler } = require('./utils/exchangeRateScheduler');
 startExchangeRateScheduler();
+
+const { startStaleDealsScheduler } = require('./utils/staleDealsScheduler');
+startStaleDealsScheduler();

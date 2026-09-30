@@ -5,6 +5,7 @@ const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
 const { resolveDealCountry } = require('../utils/pipelineCountry');
 const { createNotification } = require('../utils/notify');
+const { fireStageChanged, fireStatusChanged } = require('../utils/automations');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -260,6 +261,7 @@ router.patch('/:id/stage', async (req, res) => {
   });
 
   res.json(updated);
+  if (stage_id !== current?.stage_id) fireStageChanged(updated, stage_id);
 });
 
 // POST /api/deals/:id/win — marca ganado y opcionalmente instancia un proyecto de onboarding
@@ -288,6 +290,18 @@ router.post('/:id/win', async (req, res) => {
   }
 
   res.json({ deal, project });
+
+  // Estas dos rutas (/win y /lose) son las que la interfaz llama de verdad al marcar un
+  // trato — antes el aviso de "ganado/perdido" solo estaba conectado al PATCH genérico,
+  // que nadie usa para esto en la práctica, así que nunca se disparaba.
+  if (deal.owner_id && deal.owner_id !== req.teamMember.id) {
+    createNotification({
+      recipient_id: deal.owner_id, type: 'deal_won',
+      title: `El trato "${deal.title}" se marcó como ganado`,
+      entity_type: 'deal', entity_id: id, link: `/deals/${id}`,
+    });
+  }
+  fireStatusChanged(deal, 'ganado');
 });
 
 // POST /api/deals/:id/lose
@@ -305,6 +319,15 @@ router.post('/:id/lose', async (req, res) => {
   if (error) return res.status(400).json({ error: error.message });
   await logAudit('deal', id, 'status_changed', req.teamMember.id, { status: { to: 'perdido' } });
   res.json(data);
+
+  if (data.owner_id && data.owner_id !== req.teamMember.id) {
+    createNotification({
+      recipient_id: data.owner_id, type: 'deal_lost',
+      title: `El trato "${data.title}" se marcó como perdido`,
+      entity_type: 'deal', entity_id: id, link: `/deals/${id}`,
+    });
+  }
+  fireStatusChanged(data, 'perdido');
 });
 
 // POST /api/deals/:id/reopen — vuelve un trato ganado o perdido a "abierto",
