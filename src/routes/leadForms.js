@@ -16,14 +16,14 @@ router.get('/', async (req, res) => {
   res.json(data);
 });
 
-// POST /api/lead-forms  { name, pipeline_id, stage_id, owner_id? }
+// POST /api/lead-forms  { name, pipeline_id, stage_id, owner_id?, field_ids? }
 router.post('/', requireRole('admin'), async (req, res) => {
-  const { name, pipeline_id, stage_id, owner_id } = req.body;
+  const { name, pipeline_id, stage_id, owner_id, field_ids } = req.body;
   if (!name || !pipeline_id || !stage_id) return res.status(400).json({ error: 'Faltan name, pipeline_id o stage_id' });
 
   const { data, error } = await supabase
     .from('lead_forms')
-    .insert({ name, pipeline_id, stage_id, owner_id: owner_id || null, created_by: req.teamMember.id })
+    .insert({ name, pipeline_id, stage_id, owner_id: owner_id || null, field_ids: field_ids || [], created_by: req.teamMember.id })
     .select()
     .single();
   if (error) return res.status(400).json({ error: error.message });

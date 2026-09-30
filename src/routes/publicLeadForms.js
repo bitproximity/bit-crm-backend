@@ -10,16 +10,25 @@ const router = express.Router();
 // los campos que manda el visitante, nunca lee datos existentes.
 router.use(cors({ origin: '*' }));
 
-// GET /api/public/lead-forms/:id — datos mínimos para pintar el formulario (nombre, si está activo)
+// GET /api/public/lead-forms/:id — datos mínimos para pintar el formulario (nombre, si
+// está activo) + las preguntas extra configuradas (los mismos campos personalizados de
+// "trato" que ya existen en Configuración, solo los elegidos para este formulario).
 router.get('/:id', async (req, res) => {
-  const { data, error } = await supabase.from('lead_forms').select('id, name, active').eq('id', req.params.id).maybeSingle();
+  const { data, error } = await supabase.from('lead_forms').select('id, name, active, field_ids').eq('id', req.params.id).maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'Formulario no encontrado.' });
-  res.json(data);
+
+  let custom_fields = [];
+  if (data.field_ids?.length) {
+    const { data: defs } = await supabase.from('custom_field_definitions').select('id, key, label, field_type, options').in('id', data.field_ids);
+    // Respeta el orden en que Mario los eligió al armar el formulario, no el orden de la tabla.
+    custom_fields = (data.field_ids || []).map((id) => defs?.find((d) => d.id === id)).filter(Boolean);
+  }
+  res.json({ id: data.id, name: data.name, active: data.active, custom_fields });
 });
 
-// POST /api/public/lead-forms/:id/submit  { name, email?, phone?, company?, message? }
+// POST /api/public/lead-forms/:id/submit  { name, email?, phone?, company?, message?, custom_answers?: { field_id: value } }
 router.post('/:id/submit', async (req, res) => {
-  const { name, email, phone, company, message } = req.body;
+  const { name, email, phone, company, message, custom_answers } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Falta el nombre.' });
 
   const { data: form } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
@@ -78,6 +87,19 @@ router.post('/:id/submit', async (req, res) => {
       .select('id')
       .single();
     if (dealErr) throw dealErr;
+
+    if (custom_answers && typeof custom_answers === 'object') {
+      const rows = Object.entries(custom_answers)
+        .filter(([fieldId, value]) => form.field_ids?.includes(fieldId) && value !== undefined && value !== null && String(value).trim() !== '')
+        .map(([fieldId, value]) => ({ field_id: fieldId, entity_id: deal.id, value: String(value) }));
+      if (rows.length) {
+        try {
+          await supabase.from('custom_field_values').insert(rows);
+        } catch (cfErr) {
+          console.error('[lead-forms] no se pudieron guardar las respuestas personalizadas:', cfErr.message);
+        }
+      }
+    }
 
     if (message && message.trim()) {
       // No es una promesa nativa (es el query builder de Supabase) — .catch() encadenado
