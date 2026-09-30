@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
 const { resolveDealCountry } = require('../utils/pipelineCountry');
+const { createNotification } = require('../utils/notify');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -198,6 +199,10 @@ router.post('/', async (req, res) => {
 // PATCH /api/deals/:id — actualización general (título, valor, dueño, etc.)
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
+  // Se lee el dueño/estado ANTES de actualizar — para saber si de verdad cambiaron
+  // (y a quién avisar) hace falta compararlo contra el valor previo, no solo el nuevo.
+  const { data: before } = await supabase.from('deals').select('owner_id, status').eq('id', id).maybeSingle();
+
   const { data, error, skipped } = await upsertDealTolerant(
     (p) => supabase.from('deals').update(p).eq('id', id).select().single(),
     req.body
@@ -209,6 +214,22 @@ router.patch('/:id', async (req, res) => {
   }
   await logAudit('deal', id, 'updated', req.teamMember.id, { fields: Object.keys(req.body) });
   res.json(data);
+
+  // Notificaciones — no bloquean la respuesta, van después del res.json.
+  if (before && 'owner_id' in req.body && data.owner_id !== before.owner_id && data.owner_id && data.owner_id !== req.teamMember.id) {
+    createNotification({
+      recipient_id: data.owner_id, type: 'deal_reassigned',
+      title: `Te asignaron el trato "${data.title}"`,
+      entity_type: 'deal', entity_id: id, link: `/deals/${id}`,
+    });
+  }
+  if (before && 'status' in req.body && data.status !== before.status && ['ganado', 'perdido'].includes(data.status) && data.owner_id && data.owner_id !== req.teamMember.id) {
+    createNotification({
+      recipient_id: data.owner_id, type: data.status === 'ganado' ? 'deal_won' : 'deal_lost',
+      title: `El trato "${data.title}" se marcó como ${data.status}`,
+      entity_type: 'deal', entity_id: id, link: `/deals/${id}`,
+    });
+  }
 });
 
 // PATCH /api/deals/:id/stage — mover de etapa en el kanban (registra historial)

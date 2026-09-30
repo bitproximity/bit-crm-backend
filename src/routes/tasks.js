@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
 const { sendEmail } = require('../utils/email');
 const { syncTaskToCalendar, deleteTaskFromCalendar } = require('../utils/googleCalendarSync');
+const { createNotification } = require('../utils/notify');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -55,6 +56,13 @@ router.post('/', async (req, res) => {
   res.status(201).json(data);
 
   syncTaskToCalendar(data); // no bloquea la respuesta
+  if (data.assignee_id && data.assignee_id !== req.teamMember.id) {
+    createNotification({
+      recipient_id: data.assignee_id, type: 'task_assigned',
+      title: `Te asignaron la tarea "${data.title}"`,
+      entity_type: 'task', entity_id: data.id, link: '/tasks',
+    });
+  }
 });
 
 router.patch('/:id', async (req, res) => {
@@ -62,6 +70,8 @@ router.patch('/:id', async (req, res) => {
   const updates = { ...req.body };
 
   if (updates.status === 'completada') updates.completed_at = new Date().toISOString();
+
+  const { data: before } = await supabase.from('tasks').select('assignee_id').eq('id', id).maybeSingle();
 
   const { data, error } = await supabase
     .from('tasks')
@@ -79,6 +89,14 @@ router.patch('/:id', async (req, res) => {
   // Si cambió fecha, responsable, estado o título, refleja el cambio en Google Calendar
   const relevantFields = ['due_date', 'assignee_id', 'status', 'title', 'priority'];
   if (relevantFields.some((f) => f in req.body)) syncTaskToCalendar(data);
+
+  if ('assignee_id' in req.body && data.assignee_id !== before?.assignee_id && data.assignee_id && data.assignee_id !== req.teamMember.id) {
+    createNotification({
+      recipient_id: data.assignee_id, type: 'task_assigned',
+      title: `Te asignaron la tarea "${data.title}"`,
+      entity_type: 'task', entity_id: id, link: '/tasks',
+    });
+  }
 });
 
 router.delete('/:id', async (req, res) => {
@@ -128,7 +146,8 @@ router.post('/:id/comments', async (req, res) => {
     (m) => m.id !== req.teamMember.id && body.toLowerCase().includes(`@${m.full_name.toLowerCase()}`)
   );
   for (const member of mentioned) {
-    const taskUrl = `${PUBLIC_APP_URL}/tasks?open=${id}`;
+    const taskPath = `/tasks?open=${id}`;
+    const taskUrl = `${PUBLIC_APP_URL}${taskPath}`;
     sendEmail({
       to: member.email,
       subject: `${req.teamMember.full_name} te mencionó en "${task?.title || 'una tarea'}"`,
@@ -140,6 +159,11 @@ router.post('/:id/comments', async (req, res) => {
         </div>
       `,
     }).catch(() => {});
+    createNotification({
+      recipient_id: member.id, type: 'mention',
+      title: `${req.teamMember.full_name} te mencionó en "${task?.title || 'una tarea'}"`,
+      body, entity_type: 'task', entity_id: id, link: taskPath,
+    });
   }
 });
 

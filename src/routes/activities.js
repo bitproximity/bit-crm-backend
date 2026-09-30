@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { syncActivityToCalendar, getCalendarClientForUser } = require('../utils/googleCalendarSync');
 const { sendEmail } = require('../utils/email');
+const { createNotification } = require('../utils/notify');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -95,16 +96,17 @@ async function notifyMentions(body, author, activity) {
   if (mentioned.length === 0) return;
 
   let entityLabel = '';
-  let entityUrl = `${PUBLIC_APP_URL}/`;
+  let entityPath = '/';
   if (activity.entity_type === 'deal') {
     const { data: deal } = await supabase.from('deals').select('title').eq('id', activity.entity_id).maybeSingle();
     entityLabel = deal?.title ? `el trato "${deal.title}"` : 'un trato';
-    entityUrl = `${PUBLIC_APP_URL}/deals/${activity.entity_id}`;
+    entityPath = `/deals/${activity.entity_id}`;
   } else if (activity.entity_type === 'contact') {
     entityLabel = 'un contacto';
   } else if (activity.entity_type === 'company') {
     entityLabel = 'una empresa';
   }
+  const entityUrl = `${PUBLIC_APP_URL}${entityPath}`;
 
   for (const member of mentioned) {
     sendEmail({
@@ -118,6 +120,11 @@ async function notifyMentions(body, author, activity) {
         </div>
       `,
     }).catch(() => {});
+    createNotification({
+      recipient_id: member.id, type: 'mention',
+      title: `${author.full_name} te mencionó en ${entityLabel}`,
+      body, entity_type: activity.entity_type, entity_id: activity.entity_id, link: entityPath,
+    });
   }
 }
 
