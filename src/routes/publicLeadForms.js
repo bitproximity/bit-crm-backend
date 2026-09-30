@@ -1,6 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const supabase = require('../config/supabase');
+const { sendEmail } = require('../utils/email');
+const { createNotification } = require('../utils/notify');
+
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
 const router = express.Router();
 
@@ -119,9 +123,67 @@ router.post('/:id/submit', async (req, res) => {
     await supabase.from('lead_forms').update({ submissions_count: (form.submissions_count || 0) + 1 }).eq('id', form.id);
 
     res.status(201).json({ ok: true });
+
+    // Correo + notificación en la app — después de responder, no debe demorar el envío
+    // para el visitante. Si el formulario tiene dueño, le llega solo a esa persona; si
+    // no, les llega a todos los admin (así siempre hay alguien enterado, aunque nadie
+    // haya asignado el formulario todavía).
+    notifyNewLead(form, deal.id, { name, email, phone, company, message }, custom_answers).catch((err) => {
+      console.error('[lead-forms] no se pudo avisar del nuevo lead:', err.message);
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
+
+async function notifyNewLead(form, dealId, submission, customAnswers) {
+  let recipients = [];
+  if (form.owner_id) {
+    const { data: owner } = await supabase.from('team_members').select('id, email, full_name').eq('id', form.owner_id).maybeSingle();
+    if (owner) recipients = [owner];
+  } else {
+    const { data: admins } = await supabase.from('team_members').select('id, email, full_name').eq('role', 'admin').eq('active', true);
+    recipients = admins || [];
+  }
+  if (recipients.length === 0) return;
+
+  let customLines = '';
+  if (customAnswers && form.field_ids?.length) {
+    const { data: defs } = await supabase.from('custom_field_definitions').select('id, label').in('id', form.field_ids);
+    customLines = Object.entries(customAnswers)
+      .filter(([fieldId, value]) => form.field_ids.includes(fieldId) && value)
+      .map(([fieldId, value]) => {
+        const label = defs?.find((d) => d.id === fieldId)?.label || fieldId;
+        return `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">${label}</td><td style="padding:4px 0;">${value}</td></tr>`;
+      })
+      .join('');
+  }
+
+  const dealUrl = `${PUBLIC_APP_URL}/deals/${dealId}`;
+  const html = `
+    <div style="font-family: sans-serif; color: #1a1a2e; max-width: 480px;">
+      <p>Nuevo lead desde <strong>${form.name}</strong>:</p>
+      <table style="border-collapse:collapse;">
+        <tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Nombre</td><td style="padding:4px 0;">${submission.name}</td></tr>
+        ${submission.email ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Correo</td><td style="padding:4px 0;">${submission.email}</td></tr>` : ''}
+        ${submission.phone ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Teléfono</td><td style="padding:4px 0;">${submission.phone}</td></tr>` : ''}
+        ${submission.company ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Empresa</td><td style="padding:4px 0;">${submission.company}</td></tr>` : ''}
+        ${customLines}
+      </table>
+      ${submission.message ? `<p style="margin-top:12px;"><strong>Mensaje:</strong><br/>${submission.message}</p>` : ''}
+      <a href="${dealUrl}" style="display:inline-block;margin-top:16px;color:#8500FF;">Ver el trato en Bit CRM →</a>
+    </div>
+  `;
+
+  for (const r of recipients) {
+    sendEmail({ to: r.email, subject: `Nuevo lead: ${form.name}`, html }).catch(() => {});
+    createNotification({
+      recipient_id: r.id, type: 'new_lead',
+      title: `Nuevo lead: ${submission.company?.trim() || submission.name}`,
+      body: `Desde el formulario "${form.name}"`,
+      entity_type: 'deal', entity_id: dealId, link: `/deals/${dealId}`,
+    });
+  }
+}
 
 module.exports = router;
