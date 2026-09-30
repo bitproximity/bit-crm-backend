@@ -1,20 +1,21 @@
 const express = require('express');
 const supabase = require('../config/supabase');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/rolePermissions');
 const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
 
 // GET /api/automation-rules
-router.get('/', async (req, res) => {
+router.get('/', requirePermission('automations', 'view'), async (req, res) => {
   const { data, error } = await supabase.from('automation_rules').select('*').order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
 // POST /api/automation-rules
-router.post('/', requireRole('admin'), async (req, res) => {
+router.post('/', requirePermission('automations', 'manage'), async (req, res) => {
   const { name, trigger_type, trigger_config, action_type, action_config } = req.body;
   if (!name || !trigger_type || !action_type) return res.status(400).json({ error: 'Faltan name, trigger_type o action_type' });
 
@@ -30,7 +31,7 @@ router.post('/', requireRole('admin'), async (req, res) => {
 });
 
 // PATCH /api/automation-rules/:id
-router.patch('/:id', requireRole('admin'), async (req, res) => {
+router.patch('/:id', requirePermission('automations', 'manage'), async (req, res) => {
   const { data, error } = await supabase.from('automation_rules').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
   await logAudit('automation_rule', req.params.id, 'updated', req.teamMember.id, { fields: Object.keys(req.body) });
@@ -38,7 +39,7 @@ router.patch('/:id', requireRole('admin'), async (req, res) => {
 });
 
 // DELETE /api/automation-rules/:id
-router.delete('/:id', requireRole('admin'), async (req, res) => {
+router.delete('/:id', requirePermission('automations', 'manage'), async (req, res) => {
   const { error } = await supabase.from('automation_rules').delete().eq('id', req.params.id);
   if (error) return res.status(400).json({ error: error.message });
   await logAudit('automation_rule', req.params.id, 'deleted', req.teamMember.id);

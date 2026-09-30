@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { sendEmail } = require('../utils/email');
+const { resolvePermissions } = require('../middleware/rolePermissions');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -208,7 +209,8 @@ router.delete('/:id/permanent', requireRole('admin'), async (req, res) => {
 
 // GET /api/team/me — perfil del usuario autenticado
 router.get('/me', async (req, res) => {
-  res.json(req.teamMember);
+  const permissions = await resolvePermissions(req.teamMember.role);
+  res.json({ ...req.teamMember, permissions });
 });
 
 module.exports = router;
