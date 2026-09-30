@@ -49,6 +49,7 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 app.use('/api/team', require('./routes/team'));
 app.use('/api/contacts', require('./routes/contacts'));
 app.use('/api/companies', require('./routes/companies'));
+app.use('/api/duplicates', require('./routes/duplicates'));
 app.use('/api/pipelines', require('./routes/pipelines'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/enrichment', require('./routes/enrichment'));
