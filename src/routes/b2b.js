@@ -5,6 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
 const { logAudit } = require('../utils/audit');
+const { BIT_PROSPECT_TEAM_EXCLUDE } = require('../utils/bitProspectTeam');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -71,10 +72,9 @@ async function syncRecordToContact(record, clientName, ownerId) {
 }
 
 // Personas que hacen prospección/reuniones para Bit Prospect (no todo el equipo del CRM
-// aplica — ej. soporte técnico no debe aparecer en "Rendimiento por persona").
-// Si el equipo de prospección cambia, actualiza esta lista.
-const BIT_PROSPECT_TEAM_EXCLUDE = ['Diego Molina'];
-
+// aplica — ej. soporte técnico o un socio externo no deben aparecer en "Rendimiento por
+// persona"). La lista de excluidos vive en utils/bitProspectTeam.js — compartida con
+// quotas.js para que ambos coincidan siempre.
 async function getBitProspectTeam() {
   const { data } = await supabase.from('team_members').select('full_name').eq('active', true);
   return (data || []).filter((m) => !BIT_PROSPECT_TEAM_EXCLUDE.includes(m.full_name));

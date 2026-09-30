@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
+const { BIT_PROSPECT_TEAM_EXCLUDE } = require('../utils/bitProspectTeam');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -19,11 +20,14 @@ router.get('/', async (req, res) => {
   const month = req.query.month || new Date().toISOString().slice(0, 7);
   const { start, end } = monthBounds(month);
 
-  const [{ data: team }, { data: quotas }, { data: records }] = await Promise.all([
+  const [{ data: rawTeam }, { data: quotas }, { data: records }] = await Promise.all([
     supabase.from('team_members').select('id, full_name').eq('active', true),
     supabase.from('sales_quotas').select('*').eq('month', month),
     supabase.from('b2b_records').select('owner_id, executive, meeting_date, companies(name)').gte('meeting_date', start).lt('meeting_date', end),
   ]);
+  // Mismo criterio que /leaderboard: quien no hace prospección/reuniones para Bit Prospect
+  // (soporte técnico, un socio externo) no debería aparecer con una meta de reuniones.
+  const team = (rawTeam || []).filter((m) => !BIT_PROSPECT_TEAM_EXCLUDE.includes(m.full_name));
 
   // El equipo de Bit Prospect a veces carga registros con "executive" (texto libre) en vez
   // de dejar que quede por owner_id — se cuenta por owner_id cuando existe, y si no, por
