@@ -31,9 +31,15 @@ router.get('/', async (req, res) => {
   if (position) query = query.eq('position', position);
   if (industry) query = query.eq('companies.industry', industry);
   if (search) {
-    query = query.or(
-      `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`
-    );
+    // Antes solo comparaba el texto completo contra cada campo por separado, así que
+    // buscar "Juan Pérez" (nombre Y apellido juntos) no encontraba a alguien con
+    // first_name="Juan" y last_name="Pérez", porque ninguno de los dos campos solo
+    // contiene la frase completa. Partiendo la búsqueda en palabras y exigiendo que
+    // CADA palabra aparezca en algún campo (sin importar en cuál), "Juan Pérez" sí
+    // encuentra a alguien con esos first_name/last_name separados.
+    search.trim().split(/\s+/).filter(Boolean).forEach((word) => {
+      query = query.or(`first_name.ilike.%${word}%,last_name.ilike.%${word}%,email.ilike.%${word}%`);
+    });
   }
 
   const { data, error, count } = await query;
