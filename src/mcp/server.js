@@ -1,6 +1,9 @@
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { z } = require('zod');
 const supabase = require('../config/supabase');
+const { mergeCompanies, findDuplicateCompanyGroups, cleanName } = require('../utils/mergeRecords');
+const { BLOCKABLE_PAGES } = require('../middleware/pagePermissions');
+const { logAudit } = require('../utils/audit');
 
 // ── Helpers compartidos ──────────────────────────────────────────────
 
@@ -42,9 +45,10 @@ async function resolveOrCreateContact(name, email, phone) {
 
 async function resolveOrCreateCompany(name) {
   if (!name) return null;
-  const { data: existing } = await supabase.from('companies').select('id').ilike('name', name).maybeSingle();
-  if (existing) return existing.id;
-  const { data: created } = await supabase.from('companies').insert({ name }).select('id').single();
+  const clean = cleanName(name);
+  const { data: matches } = await supabase.from('companies').select('id').ilike('name', clean).order('created_at').limit(1);
+  if (matches?.[0]) return matches[0].id;
+  const { data: created } = await supabase.from('companies').insert({ name: clean }).select('id').single();
   return created?.id || null;
 }
 
@@ -245,16 +249,70 @@ function buildServer(teamMember) {
     'bitcrm_list_companies',
     {
       title: 'Buscar empresas',
-      description: 'Busca empresas por nombre. Devuelve id, nombre, industria y país.',
-      inputSchema: { search: z.string().optional(), limit: z.number().int().min(1).max(100).default(20) },
+      description: 'Busca empresas por nombre, con paginación (offset). Devuelve id, nombre, industria, país y el total de empresas que coinciden.',
+      inputSchema: {
+        search: z.string().optional(),
+        limit: z.number().int().min(1).max(100).default(20),
+        offset: z.number().int().min(0).default(0).describe('Desde qué posición empezar (para recorrer más de 100)'),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ search, limit }) => {
-      let query = supabase.from('companies').select('id, name, industry, country').order('created_at', { ascending: false }).limit(limit);
+    async ({ search, limit, offset }) => {
+      let query = supabase.from('companies').select('id, name, industry, country', { count: 'exact' }).order('created_at', { ascending: false }).range(offset, offset + limit - 1);
       if (search) query = query.ilike('name', `%${search}%`);
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) return errorResult(error.message);
-      return textResult({ count: data.length, companies: data });
+      return textResult({ total: count, offset, count: data.length, companies: data });
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_find_duplicate_companies',
+    {
+      title: 'Detectar empresas duplicadas',
+      description: 'Recorre TODAS las empresas y agrupa las que tienen el mismo nombre normalizado (sin tildes, mayúsculas, espacios sobrantes ni sufijos legales como SAS/LLC/S.A.). Devuelve cada grupo con conteo de tratos y contactos para elegir cuál conservar.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        const out = await findDuplicateCompanyGroups();
+        return textResult({ total_companies: out.total_companies, duplicate_groups: out.groups.length, groups: out.groups });
+      } catch (err) {
+        return errorResult(err.message);
+      }
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_merge_companies',
+    {
+      title: 'Fusionar empresas duplicadas',
+      description: 'Fusiona empresas duplicadas en una principal: mueve tratos, contactos, facturas, proyectos, documentos, actividades, archivos de Drive y registros de Bit Prospect a la principal y borra las duplicadas. Solo admin. Con confirm=false (default) solo muestra qué se movería.',
+      inputSchema: {
+        primary_id: z.string().uuid().describe('Empresa que se conserva'),
+        duplicate_ids: z.array(z.string().uuid()).min(1).describe('Empresas que se fusionan en la principal y se borran'),
+        confirm: z.boolean().default(false),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ primary_id, duplicate_ids, confirm }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede fusionar empresas.');
+      if (duplicate_ids.includes(primary_id)) return errorResult('primary_id no puede estar en duplicate_ids.');
+      const { data: rows } = await supabase.from('companies').select('id, name').in('id', [primary_id, ...duplicate_ids]);
+      const primary = (rows || []).find((r) => r.id === primary_id);
+      if (!primary) return errorResult('No encontré la empresa principal.');
+      const dups = (rows || []).filter((r) => r.id !== primary_id);
+      if (!confirm) {
+        return textResult({ preview: true, keep: primary, merge_and_delete: dups, note: 'Nada fue modificado. Llama con confirm=true para ejecutar.' });
+      }
+      try {
+        await mergeCompanies(primary_id, dups.map((d) => d.id));
+        await logAudit('company', primary_id, 'merged_duplicates', teamMember.id, { duplicate_ids: dups.map((d) => d.id), via: 'mcp' });
+        return textResult({ merged: true, kept: primary, deleted: dups });
+      } catch (err) {
+        return errorResult(err.message);
+      }
     }
   );
 
@@ -590,6 +648,77 @@ function buildServer(teamMember) {
       }
 
       return textResult({ deleted: true, pipeline: pipeline.name, deleted_count: deletedCount, kept_count: keep_deal_ids.length });
+    }
+  );
+
+  // ─── EQUIPO ───
+  server.registerTool(
+    'bitcrm_list_team',
+    {
+      title: 'Listar equipo',
+      description: 'Lista las personas del equipo con su rol, si están activas, las secciones bloqueadas puntualmente (blocked_pages) y las cuentas de Google conectadas en su perfil. Solo admin.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async () => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede ver el equipo.');
+      const [{ data: members, error }, { data: conns }] = await Promise.all([
+        supabase.from('team_members').select('*').order('full_name'),
+        supabase.from('gmail_connections').select('team_member_id, email'),
+      ]);
+      if (error) return errorResult(error.message);
+      return textResult({
+        members: (members || []).map((m) => ({
+          id: m.id, full_name: m.full_name, email: m.email, role: m.role, active: m.active,
+          blocked_pages: m.blocked_pages || [],
+          google_accounts: (conns || []).filter((c) => c.team_member_id === m.id).map((c) => c.email),
+        })),
+      });
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_invite_team_member',
+    {
+      title: 'Invitar persona al equipo',
+      description: 'Crea el acceso al CRM de una persona y le manda el correo de invitación. Roles: admin, operaciones, outbound, wifi_partner. Solo admin.',
+      inputSchema: {
+        full_name: z.string(),
+        email: z.string().email(),
+        role: z.enum(['admin', 'operaciones', 'outbound', 'wifi_partner']),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ full_name, email, role }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede invitar.');
+      const { inviteTeamMember } = require('../routes/team');
+      const out = await inviteTeamMember({ full_name, email, role });
+      if (out.error) return errorResult(out.error);
+      return textResult({ invited: true, email_sent: out.email_sent, member: { id: out.member.id, full_name: out.member.full_name, email: out.member.email, role: out.member.role } });
+    }
+  );
+
+  server.registerTool(
+    'bitcrm_update_team_member_access',
+    {
+      title: 'Cambiar rol o secciones bloqueadas de una persona',
+      description: `Cambia el rol y/o las secciones bloqueadas puntualmente (blocked_pages) de una persona del equipo. Secciones bloqueables: ${BLOCKABLE_PAGES.join(', ')}. blocked_pages reemplaza la lista completa. Solo admin.`,
+      inputSchema: {
+        team_member_id: z.string().uuid(),
+        role: z.enum(['admin', 'operaciones', 'outbound', 'wifi_partner']).optional(),
+        blocked_pages: z.array(z.enum(BLOCKABLE_PAGES)).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ team_member_id, role, blocked_pages }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede cambiar accesos.');
+      const update = {};
+      if (role) update.role = role;
+      if (blocked_pages) update.blocked_pages = blocked_pages;
+      if (!Object.keys(update).length) return errorResult('Nada que cambiar.');
+      const { data, error } = await supabase.from('team_members').update(update).eq('id', team_member_id).select('*').single();
+      if (error) return errorResult(error.message);
+      return textResult({ updated: true, member: { id: data.id, full_name: data.full_name, role: data.role, blocked_pages: data.blocked_pages || [] } });
     }
   );
 

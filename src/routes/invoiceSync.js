@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { canonicalAccountName } = require('../utils/accountNames');
 
 router.use(requireAuth);
+router.use(require('../middleware/pagePermissions').requirePage('facturacion'));
 
 // Sincronización de facturas emitidas en Stripe y Alegra hacia el módulo de Facturación del
 // CRM. Corre sola cada cierto tiempo (ver scheduler.js) y también se puede disparar a mano

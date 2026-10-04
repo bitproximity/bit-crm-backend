@@ -35,6 +35,11 @@ router.post('/connect', async (req, res) => {
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'Falta la API key' });
 
+  // La API key de Cal.com es personal: si ya la conectó otra persona del equipo, es su
+  // agenda, no la tuya.
+  const { data: taken } = await supabase.from('calcom_connections').select('team_member_id').eq('api_key', api_key).neq('team_member_id', req.teamMember.id).limit(1);
+  if (taken && taken.length > 0) return res.status(400).json({ error: 'Esa API key de Cal.com ya está conectada por otra persona del equipo. Usa la de tu propia cuenta de Cal.com.' });
+
   // Valida la key contra la API v2 de Cal.com antes de guardarla.
   // Usamos /v2/bookings (el mismo endpoint que consultamos después) en vez de
   // /v2/event-types, que devolvía 404 en algunos tipos de cuenta.

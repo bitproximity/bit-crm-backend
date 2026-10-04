@@ -11,9 +11,20 @@ const ROLE_ALLOWED_PAGES = {
   wifi_partner: ['deals', 'contactos', 'empresas', 'metricas', 'tasks', 'projects', 'spaces', 'documents'],
 };
 
+// Secciones que se pueden bloquear a una persona puntual (team_members.blocked_pages),
+// encima de lo que permite su rol — incluso a un admin (ej. un admin sin Facturación).
+const BLOCKABLE_PAGES = ['facturacion', 'metricas', 'forecast', 'b2b', 'deals', 'productos'];
+
+function isBlockedForUser(teamMember, pageKey) {
+  return Array.isArray(teamMember?.blocked_pages) && teamMember.blocked_pages.includes(pageKey);
+}
+
 function requirePage(pageKey) {
   return (req, res, next) => {
     const role = req.teamMember?.role;
+    if (isBlockedForUser(req.teamMember, pageKey)) {
+      return res.status(403).json({ error: 'No tienes acceso a esta sección del CRM.' });
+    }
     if (role === 'admin') return next();
     const allowed = ROLE_ALLOWED_PAGES[role];
     if (allowed && allowed.includes(pageKey)) return next();
@@ -21,4 +32,4 @@ function requirePage(pageKey) {
   };
 }
 
-module.exports = { requirePage };
+module.exports = { requirePage, isBlockedForUser, BLOCKABLE_PAGES };

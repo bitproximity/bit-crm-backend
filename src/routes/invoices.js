@@ -6,7 +6,9 @@ const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+// 'facturacion' no está en la lista de ningún rol -> sigue siendo solo admin, pero ahora
+// además respeta team_members.blocked_pages (un admin puede tener Facturación bloqueada).
+router.use(requirePage('facturacion'));
 
 function withOverdueFlag(inv) {
   const overdue = inv.status !== 'pagada' && inv.status !== 'cancelada' && inv.due_date && inv.due_date < new Date().toISOString().slice(0, 10);

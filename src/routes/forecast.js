@@ -5,7 +5,7 @@ const { requirePage } = require('../middleware/pagePermissions');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requirePage('__admin_only__'));
+router.use(requirePage('forecast'));
 
 // GET /api/forecast?months=3 — forecast ponderado por probabilidad, agrupado por mes de cierre esperado
 router.get('/', async (req, res) => {

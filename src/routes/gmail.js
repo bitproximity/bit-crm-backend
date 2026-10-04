@@ -36,6 +36,19 @@ router.get('/callback', async (req, res) => {
     const oauth2 = google.oauth2({ auth: client, version: 'v2' });
     const { data: userInfo } = await oauth2.userinfo.get();
 
+    // Una cuenta de Google pertenece a UNA sola persona del equipo. Sin este chequeo,
+    // si alguien conectaba desde un navegador con la sesión de Google de otra persona
+    // (ej. Diego conectando el Google de Mario), su Dashboard mostraba el calendario y
+    // los correos de esa otra persona.
+    const googleEmail = (userInfo.email || '').toLowerCase();
+    const [{ data: ownerByLogin }, { data: takenBy }] = await Promise.all([
+      supabase.from('team_members').select('id').ilike('email', googleEmail).neq('id', teamMemberId).maybeSingle(),
+      supabase.from('gmail_connections').select('team_member_id').ilike('email', googleEmail).neq('team_member_id', teamMemberId).limit(1),
+    ]);
+    if (ownerByLogin || (takenBy && takenBy.length > 0)) {
+      return res.redirect(`${PUBLIC_APP_URL}/profile?gmail=taken&email=${encodeURIComponent(googleEmail)}`);
+    }
+
     // onConflict por (team_member_id, email): conectar una cuenta NUEVA agrega una fila
     // aparte en vez de pisar la que ya tenías — así se pueden tener varias cuentas
     // conectadas a la vez (ej. mario@bitproximity.com + mario@bitwifiapp.com). Si

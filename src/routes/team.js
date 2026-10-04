@@ -51,22 +51,25 @@ async function createAndSendAccessLink({ type, email, fullName }) {
 router.get('/', async (req, res) => {
   const { data, error } = await supabase
     .from('team_members')
-    .select('id, full_name, email, role, active, created_at')
+    .select('*')
     .order('full_name');
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  // select('*') + recorte: así no truena si la migración 050 (blocked_pages) aún no corrió
+  res.json((data || []).map((m) => ({
+    id: m.id, full_name: m.full_name, email: m.email, role: m.role, active: m.active,
+    created_at: m.created_at, blocked_pages: m.blocked_pages || [],
+  })));
 });
 
-// POST /api/team/invite  { full_name, email, role }
-// Crea el login real en Supabase Auth + manda el correo de invitación por nuestro propio SES.
-// Solo admin puede invitar.
-router.post('/invite', requireRole('admin'), async (req, res) => {
-  const { full_name, email, role } = req.body;
-  if (!full_name || !email) return res.status(400).json({ error: 'Falta nombre o correo' });
+// Lógica de invitación reutilizable (la usa la ruta y también el servidor MCP).
+// Devuelve { member } o { status, error }.
+async function inviteTeamMember({ full_name, email, role }) {
+  if (!full_name || !email) return { status: 400, error: 'Falta nombre o correo' };
+  email = String(email).trim().toLowerCase();
 
-  const { data: existingProfile } = await supabase.from('team_members').select('id').eq('email', email).maybeSingle();
-  if (existingProfile) return res.status(400).json({ error: 'Ya existe un perfil de equipo con ese correo.' });
+  const { data: existingProfile } = await supabase.from('team_members').select('id').ilike('email', email).maybeSingle();
+  if (existingProfile) return { status: 400, error: 'Ya existe un perfil de equipo con ese correo.' };
 
   let authUserId;
   let result = await createAndSendAccessLink({ type: 'invite', email, fullName: full_name });
@@ -76,15 +79,13 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
     // de ser invitado). En vez de fallar, reutilizamos esa cuenta y le mandamos un link
     // de acceso normal.
     const alreadyRegistered = /already.*registered/i.test(result.error.message);
-    if (!alreadyRegistered) {
-      return res.status(400).json({ error: `No se pudo crear el acceso: ${result.error.message}` });
-    }
+    if (!alreadyRegistered) return { status: 400, error: `No se pudo crear el acceso: ${result.error.message}` };
 
     const { data: userList, error: listError } = await supabase.auth.admin.listUsers();
-    if (listError) return res.status(400).json({ error: `No se pudo ubicar la cuenta existente: ${listError.message}` });
+    if (listError) return { status: 400, error: `No se pudo ubicar la cuenta existente: ${listError.message}` };
 
-    const found = userList.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
-    if (!found) return res.status(400).json({ error: 'El correo ya está registrado en Auth, pero no lo pude ubicar. Contacta soporte.' });
+    const found = userList.users.find((u) => u.email?.toLowerCase() === email);
+    if (!found) return { status: 400, error: 'El correo ya está registrado en Auth, pero no lo pude ubicar. Contacta soporte.' };
     authUserId = found.id;
 
     result = await createAndSendAccessLink({ type: 'magiclink', email, fullName: full_name });
@@ -100,12 +101,19 @@ router.post('/invite', requireRole('admin'), async (req, res) => {
     .single();
 
   if (error) {
-    // Si falla la creación del perfil y el usuario de Auth se creó recién (no existía antes), no lo dejamos huérfano
-    if (!existingProfile) await supabase.auth.admin.deleteUser(authUserId).catch(() => {});
-    return res.status(400).json({ error: error.message });
+    if (result.data?.user?.id === authUserId) await supabase.auth.admin.deleteUser(authUserId).catch(() => {});
+    return { status: 400, error: error.message };
   }
+  return { member, email_sent: !result.error };
+}
 
-  res.status(201).json(member);
+// POST /api/team/invite  { full_name, email, role }
+// Crea el login real en Supabase Auth + manda el correo de invitación por nuestro propio SES.
+// Solo admin puede invitar.
+router.post('/invite', requireRole('admin'), async (req, res) => {
+  const out = await inviteTeamMember(req.body);
+  if (out.error) return res.status(out.status || 400).json({ error: out.error });
+  res.status(201).json(out.member);
 });
 
 // POST /api/team/:id/resend-access — reenvía el acceso a alguien que YA tiene perfil
@@ -214,3 +222,4 @@ router.get('/me', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.inviteTeamMember = inviteTeamMember;

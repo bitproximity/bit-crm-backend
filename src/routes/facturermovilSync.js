@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { canonicalAccountName } = require('../utils/accountNames');
 
 router.use(requireAuth);
+router.use(require('../middleware/pagePermissions').requirePage('facturacion'));
 
 // Facturero Móvil (Ecuador) — se autentica con usuario/clave (no un token fijo):
 // POST /api/login_check devuelve un JWT que hay que usar en las llamadas siguientes.
