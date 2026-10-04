@@ -39,8 +39,8 @@ alter table b2b_records add constraint b2b_records_client_company_id_fkey
 alter table team_members add column if not exists blocked_pages text[] not null default '{}';
 
 update team_members
-set blocked_pages = array(select distinct unnest(blocked_pages || array['facturacion']))
-where lower(email) = 'support@bitproximity.com';  -- Diego Molina
+set blocked_pages = array(select distinct unnest(blocked_pages || array['facturacion', 'agenda_equipo']))
+where lower(email) = 'support@bitproximity.com';  -- Diego Molina: sin Facturación ni la agenda de los demás
 
 -- ─── 4. Cuentas de Google/Cal.com conectadas bajo el usuario equivocado ───
 -- Una misma cuenta de Google solo puede pertenecer a UN miembro del equipo. Si alguien

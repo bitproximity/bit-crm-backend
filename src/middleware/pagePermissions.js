@@ -13,7 +13,8 @@ const ROLE_ALLOWED_PAGES = {
 
 // Secciones que se pueden bloquear a una persona puntual (team_members.blocked_pages),
 // encima de lo que permite su rol — incluso a un admin (ej. un admin sin Facturación).
-const BLOCKABLE_PAGES = ['facturacion', 'metricas', 'forecast', 'b2b', 'deals', 'productos'];
+// 'agenda_equipo' no es una página: quien la tiene bloqueada solo ve sus propias actividades.
+const BLOCKABLE_PAGES = ['facturacion', 'agenda_equipo', 'metricas', 'forecast', 'b2b', 'deals', 'productos'];
 
 function isBlockedForUser(teamMember, pageKey) {
   return Array.isArray(teamMember?.blocked_pages) && teamMember.blocked_pages.includes(pageKey);

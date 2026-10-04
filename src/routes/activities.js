@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { isBlockedForUser } = require('../middleware/pagePermissions');
 const { syncActivityToCalendar, getCalendarClientForUser } = require('../utils/googleCalendarSync');
 const { sendEmail } = require('../utils/email');
 const { createNotification } = require('../utils/notify');
@@ -22,7 +23,10 @@ router.get('/', async (req, res) => {
     `)
     .order('due_date', { ascending: true, nullsFirst: false });
 
-  if (mine === 'true') query = query.eq('author_id', req.teamMember.id);
+  // Quien tiene bloqueada la "Agenda del equipo" (blocked_pages) solo ve lo suyo, aunque
+  // no mande mine=true — si no, vería las reuniones y llamadas agendadas de los demás.
+  const forceMine = isBlockedForUser(req.teamMember, 'agenda_equipo');
+  if (mine === 'true' || forceMine) query = query.eq('author_id', req.teamMember.id);
 
   if (status === 'completada') query = query.eq('done', true);
   else if (status === 'vencida') query = query.eq('done', false).lt('due_date', new Date().toISOString());
