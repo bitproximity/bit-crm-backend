@@ -3,7 +3,8 @@ const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
-const { normalizeCompanyName, normalizeContactName, normalizeEmail } = require('../utils/duplicates');
+const { normalizeContactName, normalizeEmail } = require('../utils/duplicates');
+const { mergeCompanies, findDuplicateCompanyGroups } = require('../utils/mergeRecords');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -13,29 +14,12 @@ router.use(requirePage('empresas'));
 // (sin tildes/mayúsculas/sufijos legales como SAS, LLC, S.A.) — ej. "Bit Colombia SAS"
 // y "BIT COLOMBIA S.A.S." caen en el mismo grupo.
 router.get('/companies', async (req, res) => {
-  const { data: companies, error } = await supabase
-    .from('companies')
-    .select('id, name, industry, country, created_at, deals(count), contacts(count)')
-    .order('created_at');
-  if (error) return res.status(500).json({ error: error.message });
-
-  const groups = {};
-  (companies || []).forEach((c) => {
-    const key = normalizeCompanyName(c.name);
-    if (!key) return;
-    (groups[key] ||= []).push({
-      id: c.id,
-      name: c.name,
-      industry: c.industry,
-      country: c.country,
-      created_at: c.created_at,
-      deals_count: c.deals?.[0]?.count || 0,
-      contacts_count: c.contacts?.[0]?.count || 0,
-    });
-  });
-
-  const duplicateGroups = Object.values(groups).filter((g) => g.length > 1);
-  res.json(duplicateGroups);
+  try {
+    const { groups } = await findDuplicateCompanyGroups();
+    res.json(groups);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/duplicates/contacts — agrupa por email exacto (la señal más confiable) y,
@@ -90,12 +74,7 @@ router.post('/merge', requireRole('admin'), async (req, res) => {
 
   try {
     if (type === 'company') {
-      await supabase.from('deals').update({ company_id: primary_id }).in('company_id', duplicate_ids);
-      await supabase.from('contacts').update({ company_id: primary_id }).in('company_id', duplicate_ids);
-      await supabase.from('invoices').update({ company_id: primary_id }).in('company_id', duplicate_ids);
-      await supabase.from('activities').update({ entity_id: primary_id }).eq('entity_type', 'company').in('entity_id', duplicate_ids);
-      const { error: delErr } = await supabase.from('companies').delete().in('id', duplicate_ids);
-      if (delErr) throw delErr;
+      await mergeCompanies(primary_id, duplicate_ids);
     } else {
       await supabase.from('deals').update({ contact_id: primary_id }).in('contact_id', duplicate_ids);
       await supabase.from('invoices').update({ contact_id: primary_id }).in('contact_id', duplicate_ids);

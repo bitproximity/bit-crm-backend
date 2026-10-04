@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
+const { cleanName } = require('../utils/mergeRecords');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -39,7 +40,8 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { data, error } = await supabase.from('companies').insert(req.body).select().single();
+  const body = { ...req.body, name: cleanName(req.body.name) };
+  const { data, error } = await supabase.from('companies').insert(body).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
   await logAudit('company', data.id, 'created', req.teamMember.id);
@@ -50,7 +52,7 @@ router.patch('/:id', async (req, res) => {
   const { id } = req.params;
   const { data, error } = await supabase
     .from('companies')
-    .update(req.body)
+    .update('name' in req.body ? { ...req.body, name: cleanName(req.body.name) } : req.body)
     .eq('id', id)
     .select()
     .single();

@@ -1,4 +1,5 @@
 const express = require('express');
+const { cleanName } = require('../utils/mergeRecords');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
@@ -28,12 +29,16 @@ async function syncRecordToContact(record, clientName, ownerId) {
   }
 
   let companyId;
-  const { data: existingCompany } = await supabase.from('companies').select('id').ilike('name', record.target_company).maybeSingle();
+  // limit(1) en vez de maybeSingle(): si ya había 2 empresas con ese nombre, maybeSingle()
+  // devolvía error -> "no existe" -> creaba una TERCERA. Y se compara el nombre limpio.
+  const targetName = cleanName(record.target_company);
+  const { data: matches } = await supabase.from('companies').select('id').ilike('name', targetName).order('created_at').limit(1);
+  const existingCompany = matches?.[0];
   if (existingCompany) {
     companyId = existingCompany.id;
   } else {
     const { data: newCompany, error: companyError } = await supabase
-      .from('companies').insert({ name: record.target_company, country: record.country || null, industry: record.industry || null }).select('id').single();
+      .from('companies').insert({ name: targetName, country: record.country || null, industry: record.industry || null }).select('id').single();
     if (companyError) return { skipped: true, error: companyError.message };
     companyId = newCompany.id;
   }

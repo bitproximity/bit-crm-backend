@@ -1,4 +1,5 @@
 const express = require('express');
+const { loadCompanyMap, normalizeCompanyName, cleanName } = require('../utils/mergeRecords');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
@@ -427,12 +428,10 @@ router.post('/import', async (req, res) => {
 
   // 1) Trae de una sola vez todas las empresas y contactos existentes,
   // para no consultar la base fila por fila (eso es lo que lo hacía lento).
-  const [{ data: existingCompanies }, { data: existingContacts }] = await Promise.all([
-    supabase.from('companies').select('id, name'),
+  const [companyMap, { data: existingContacts }] = await Promise.all([
+    loadCompanyMap(),
     supabase.from('contacts').select('id, first_name, company_id'),
   ]);
-
-  const companyMap = new Map((existingCompanies || []).map((c) => [c.name.toLowerCase().trim(), c.id]));
   const contactMap = new Map(
     (existingContacts || []).map((c) => [`${c.first_name.toLowerCase().trim()}|${c.company_id || 'none'}`, c.id])
   );
@@ -440,20 +439,21 @@ router.post('/import', async (req, res) => {
   // 2) Junta los nombres de empresas/contactos nuevos que hacen falta crear (sin duplicados)
   const newCompanyNames = new Set();
   deals.forEach((d) => {
-    if (d.company_name && !companyMap.has(d.company_name.toLowerCase().trim())) {
-      newCompanyNames.add(d.company_name.trim());
+    const key = normalizeCompanyName(d.company_name);
+    if (key && !companyMap.has(key) && ![...newCompanyNames].some((n) => normalizeCompanyName(n) === key)) {
+      newCompanyNames.add(cleanName(d.company_name));
     }
   });
 
   if (newCompanyNames.size > 0) {
     const createdCompanies = await batchInsert('companies', [...newCompanyNames].map((name) => ({ name })));
-    createdCompanies.forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
+    createdCompanies.forEach((c) => companyMap.set(normalizeCompanyName(c.name), c.id));
   }
 
   const newContacts = new Map(); // key -> { first_name, last_name, email, company_id }
   deals.forEach((d) => {
     if (!d.contact_name) return;
-    const company_id = d.company_name ? companyMap.get(d.company_name.toLowerCase().trim()) : null;
+    const company_id = d.company_name ? companyMap.get(normalizeCompanyName(d.company_name)) : null;
     const key = `${d.contact_name.split(' ')[0].toLowerCase().trim()}|${company_id || 'none'}`;
     if (!contactMap.has(key) && !newContacts.has(key)) {
       const [first_name, ...rest] = d.contact_name.split(' ');
@@ -489,7 +489,7 @@ router.post('/import', async (req, res) => {
       return;
     }
 
-    const company_id = d.company_name ? companyMap.get(d.company_name.toLowerCase().trim()) || null : null;
+    const company_id = d.company_name ? companyMap.get(normalizeCompanyName(d.company_name)) || null : null;
     const contact_id = d.contact_name
       ? contactMap.get(`${d.contact_name.split(' ')[0].toLowerCase().trim()}|${company_id || 'none'}`) || null
       : null;

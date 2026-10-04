@@ -1,4 +1,5 @@
 const express = require('express');
+const { loadCompanyMap, normalizeCompanyName, cleanName } = require('../utils/mergeRecords');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
@@ -127,19 +128,19 @@ router.post('/import', async (req, res) => {
   const results = { created: 0, errors: [] };
 
   // Trae todas las empresas existentes de una vez (evita una consulta por fila)
-  const { data: existingCompanies } = await supabase.from('companies').select('id, name');
-  const companyMap = new Map((existingCompanies || []).map((c) => [c.name.toLowerCase().trim(), c.id]));
+  const companyMap = await loadCompanyMap();
 
   const newCompanyNames = new Set();
   contacts.forEach((c) => {
-    if (c.company_name && !companyMap.has(c.company_name.toLowerCase().trim())) {
-      newCompanyNames.add(c.company_name.trim());
+    const key = normalizeCompanyName(c.company_name);
+    if (key && !companyMap.has(key) && ![...newCompanyNames].some((n) => normalizeCompanyName(n) === key)) {
+      newCompanyNames.add(cleanName(c.company_name));
     }
   });
 
   if (newCompanyNames.size > 0) {
     const created = await batchInsert('companies', [...newCompanyNames].map((name) => ({ name })));
-    created.forEach((c) => companyMap.set(c.name.toLowerCase().trim(), c.id));
+    created.forEach((c) => companyMap.set(normalizeCompanyName(c.name), c.id));
   }
 
   const contactsToInsert = [];
@@ -153,7 +154,7 @@ router.post('/import', async (req, res) => {
       last_name: c.last_name || null,
       email: c.email || null,
       phone: c.phone || null,
-      company_id: c.company_name ? companyMap.get(c.company_name.toLowerCase().trim()) || null : null,
+      company_id: c.company_name ? companyMap.get(normalizeCompanyName(c.company_name)) || null : null,
       source: c.source || 'importado',
       owner_id: req.teamMember.id,
     });
