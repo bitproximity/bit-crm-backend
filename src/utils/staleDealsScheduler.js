@@ -1,4 +1,5 @@
 const supabase = require('../config/supabase');
+const { fetchAll } = require('./fetchAll');
 const { executeAction } = require('./automations');
 
 const INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 día
@@ -15,7 +16,7 @@ async function checkStaleDeals() {
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();
       let query = supabase.from('deals').select('*').eq('status', 'abierto').lt('updated_at', cutoff);
       if (rule.trigger_config?.pipeline_id) query = query.eq('pipeline_id', rule.trigger_config.pipeline_id);
-      const { data: staleDeals } = await query;
+      const { data: staleDeals } = await fetchAll(query);
 
       for (const deal of staleDeals || []) {
         const { error: dupError } = await supabase.from('automation_triggers_log').insert({ rule_id: rule.id, deal_id: deal.id });

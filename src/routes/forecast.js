@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 
@@ -12,11 +13,13 @@ router.get('/', async (req, res) => {
   const months = Number(req.query.months) || 3;
 
   const [{ data: deals }, { data: rates }] = await Promise.all([
-    supabase
-      .from('deals')
-      .select('value, currency, probability, expected_close_date, status, pipeline_id, pipelines(name)')
-      .eq('status', 'abierto')
-      .not('expected_close_date', 'is', null),
+    fetchAll(
+      supabase
+        .from('deals')
+        .select('value, currency, probability, expected_close_date, status, pipeline_id, pipelines(name)')
+        .eq('status', 'abierto')
+        .not('expected_close_date', 'is', null)
+    ),
     supabase.from('exchange_rates').select('*'),
   ]);
 

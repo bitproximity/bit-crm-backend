@@ -2,6 +2,7 @@ const express = require('express');
 const { cleanName } = require('../utils/mergeRecords');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
@@ -343,7 +344,7 @@ router.get('/dashboard', async (req, res) => {
 // para comparar el equipo de Outbound en conjunto (no cliente por cliente).
 router.get('/leaderboard', async (req, res) => {
   const [{ data: records, error }, team] = await Promise.all([
-    supabase.from('b2b_records').select('*, team_members(full_name), companies(name)'),
+    fetchAll(supabase.from('b2b_records').select('*, team_members(full_name), companies(name)')),
     getBitProspectTeam(),
   ]);
   if (error) return res.status(500).json({ error: error.message });

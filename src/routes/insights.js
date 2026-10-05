@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { resolveDealCountry } = require('../utils/pipelineCountry');
@@ -38,7 +39,7 @@ router.get('/funnel', async (req, res) => {
       .select('*')
       .eq('pipeline_id', pipeline_id)
       .order('position'),
-    supabase.from('deals').select('id, stage_id, status').eq('pipeline_id', pipeline_id),
+    fetchAll(supabase.from('deals').select('id, stage_id, status').eq('pipeline_id', pipeline_id)),
   ]);
 
   const positionByStage = Object.fromEntries(stages.map((s) => [s.id, s.position]));
@@ -73,17 +74,15 @@ router.get('/velocity', async (req, res) => {
     .eq('pipeline_id', pipeline_id)
     .order('position');
 
-  const { data: deals } = await supabase
-    .from('deals')
-    .select('id, stage_id, status, created_at, closed_at')
-    .eq('pipeline_id', pipeline_id);
+  const { data: deals } = await fetchAll(
+    supabase.from('deals').select('id, stage_id, status, created_at, closed_at').eq('pipeline_id', pipeline_id)
+  );
 
   const dealIds = deals.map((d) => d.id);
-  const { data: history } = await supabase
-    .from('deal_stage_history')
-    .select('*')
-    .in('deal_id', dealIds.length ? dealIds : ['00000000-0000-0000-0000-000000000000'])
-    .order('changed_at', { ascending: true });
+  const { data: historyRows } = await selectIn(() => supabase.from('deal_stage_history').select('*'), 'deal_id', dealIds, {
+    tiebreak: ['deal_id', 'changed_at'],
+  });
+  const history = (historyRows || []).sort((a, b) => String(a.changed_at).localeCompare(String(b.changed_at)));
 
   const historyByDeal = {};
   (history || []).forEach((h) => {
@@ -172,7 +171,7 @@ router.get('/feed', async (req, res) => {
   for (const [type, ids] of Object.entries(byType)) {
     if (!ids.length) continue;
     const { table, label } = labelTables[type];
-    const { data } = await supabase.from(table).select('*').in('id', ids);
+    const { data } = await selectIn(() => supabase.from(table).select('*'), 'id', ids);
     labelMaps[type] = Object.fromEntries((data || []).map((row) => [row.id, label(row)]));
   }
 
@@ -207,7 +206,7 @@ router.get('/dashboard', async (req, res) => {
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
   const [{ data: deals, error }, { data: rates }] = await Promise.all([
-    dealsQuery,
+    fetchAll(dealsQuery),
     supabase.from('exchange_rates').select('*'),
   ]);
 

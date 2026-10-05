@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
@@ -64,7 +65,7 @@ router.get('/summary', async (req, res) => {
   }
 
   const [{ data, error }, { data: rates }] = await Promise.all([
-    invoicesQuery,
+    fetchAll(invoicesQuery),
     supabase.from('exchange_rates').select('*'),
   ]);
   if (error) return res.status(500).json({ error: error.message });

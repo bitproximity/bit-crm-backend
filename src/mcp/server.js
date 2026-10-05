@@ -1,6 +1,7 @@
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { z } = require('zod');
 const supabase = require('../config/supabase');
+const { fetchAll } = require('../utils/fetchAll');
 const { mergeCompanies, findDuplicateCompanyGroups, cleanName } = require('../utils/mergeRecords');
 const { BLOCKABLE_PAGES } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
@@ -434,7 +435,7 @@ function buildServer(teamMember) {
         supabase.from('deals').select('*', { count: 'exact', head: true }).eq('status', 'abierto'),
         supabase.from('deals').select('*', { count: 'exact', head: true }).eq('status', 'ganado').gte('closed_at', firstDay),
         supabase.from('tasks').select('*', { count: 'exact', head: true }).lt('due_date', new Date().toISOString()).neq('status', 'completada'),
-        supabase.from('deals').select('value, currency').eq('status', 'abierto'),
+        fetchAll(supabase.from('deals').select('value, currency').eq('status', 'abierto')),
         supabase.from('exchange_rates').select('*'),
       ]);
       const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));

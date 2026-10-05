@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 
@@ -37,10 +38,10 @@ router.get('/', async (req, res) => {
     { data: wonLost },
     { data: rates },
   ] = await Promise.all([
-    dealsByStageQuery,
-    supabase.from('tasks').select('status'),
+    fetchAll(dealsByStageQuery),
+    fetchAll(supabase.from('tasks').select('status')),
     supabase.from('projects').select('id, name, status'),
-    wonLostQuery,
+    fetchAll(wonLostQuery),
     supabase.from('exchange_rates').select('*'),
   ]);
 

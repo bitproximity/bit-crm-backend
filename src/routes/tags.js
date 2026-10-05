@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -77,13 +78,18 @@ router.get('/:tagId/contacts', async (req, res) => {
   const { tagId } = req.params;
   // taggables.entity_id es polimórfico (puede apuntar a deals o contacts), así que Supabase/PostgREST
   // no tiene una relación declarada para hacer el embed automático — hay que resolverlo en dos pasos.
-  const { data: links, error: linksError } = await supabase
-    .from('taggables').select('entity_id').eq('tag_id', tagId).eq('entity_type', 'contact');
+  const { data: links, error: linksError } = await fetchAll(
+    supabase.from('taggables').select('entity_id').eq('tag_id', tagId).eq('entity_type', 'contact'),
+    ['entity_id']
+  );
   if (linksError) return res.status(500).json({ error: linksError.message });
   if (links.length === 0) return res.json([]);
 
-  const { data: contacts, error } = await supabase
-    .from('contacts').select('*, companies(name), team_members!contacts_owner_id_fkey(full_name)').in('id', links.map((l) => l.entity_id));
+  const { data: contacts, error } = await selectIn(
+    () => supabase.from('contacts').select('*, companies(name), team_members!contacts_owner_id_fkey(full_name)'),
+    'id',
+    links.map((l) => l.entity_id)
+  );
   if (error) return res.status(500).json({ error: error.message });
   res.json(contacts);
 });
@@ -92,7 +98,7 @@ router.get('/:tagId/contacts', async (req, res) => {
 router.get('/with-contact-counts', async (req, res) => {
   const [{ data: allTags, error: tagsError }, { data: links, error: linksError }] = await Promise.all([
     supabase.from('tags').select('id, name, color').order('name'),
-    supabase.from('taggables').select('tag_id').eq('entity_type', 'contact'),
+    fetchAll(supabase.from('taggables').select('tag_id').eq('entity_type', 'contact'), ['tag_id', 'entity_id']),
   ]);
   if (tagsError) return res.status(500).json({ error: tagsError.message });
   if (linksError) return res.status(500).json({ error: linksError.message });

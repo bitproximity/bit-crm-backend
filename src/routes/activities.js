@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { isBlockedForUser } = require('../middleware/pagePermissions');
 const { syncActivityToCalendar, getCalendarClientForUser } = require('../utils/googleCalendarSync');
@@ -32,7 +33,7 @@ router.get('/', async (req, res) => {
   else if (status === 'vencida') query = query.eq('done', false).lt('due_date', new Date().toISOString());
   else if (status === 'pendiente') query = query.eq('done', false).gte('due_date', new Date().toISOString());
 
-  const { data, error } = await query;
+  const { data, error } = await fetchAll(query);
   if (error) return res.status(500).json({ error: error.message });
 
   // Resuelve el nombre de la entidad relacionada (contacto/empresa/deal) para mostrarla en la tabla
@@ -49,7 +50,7 @@ router.get('/', async (req, res) => {
   for (const [type, ids] of Object.entries(byType)) {
     if (!ids.length) continue;
     const { table, label } = labelTables[type];
-    const { data: rows } = await supabase.from(table).select('*').in('id', ids);
+    const { data: rows } = await selectIn(() => supabase.from(table).select('*'), 'id', ids);
     labelMaps[type] = Object.fromEntries((rows || []).map((r) => [r.id, label(r)]));
   }
 
@@ -172,8 +173,8 @@ router.post('/import', async (req, res) => {
   // Trae de una sola vez todos los deals y contactos existentes, para
   // enlazar por nombre sin consultar la base fila por fila.
   const [{ data: allDeals }, { data: allContacts }] = await Promise.all([
-    supabase.from('deals').select('id, title'),
-    supabase.from('contacts').select('id, first_name'),
+    fetchAll(supabase.from('deals').select('id, title')),
+    fetchAll(supabase.from('contacts').select('id, first_name')),
   ]);
 
   const dealByTitle = new Map((allDeals || []).map((d) => [d.title.toLowerCase().trim(), d.id]));

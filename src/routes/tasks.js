@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
 const { sendEmail } = require('../utils/email');
@@ -26,7 +27,7 @@ router.get('/', async (req, res) => {
   if (project_id) query = query.eq('project_id', project_id);
   if (due_before) query = query.lte('due_date', due_before);
 
-  const { data, error } = await query;
+  const { data, error } = await fetchAll(query);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });

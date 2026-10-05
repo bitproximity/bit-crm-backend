@@ -1,6 +1,7 @@
 const express = require('express');
 const { loadCompanyMap, normalizeCompanyName, cleanName } = require('../utils/mergeRecords');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
@@ -431,7 +432,7 @@ router.post('/import', async (req, res) => {
   // para no consultar la base fila por fila (eso es lo que lo hacía lento).
   const [companyMap, { data: existingContacts }] = await Promise.all([
     loadCompanyMap(),
-    supabase.from('contacts').select('id, first_name, company_id'),
+    fetchAll(supabase.from('contacts').select('id, first_name, company_id')),
   ]);
   const contactMap = new Map(
     (existingContacts || []).map((c) => [`${c.first_name.toLowerCase().trim()}|${c.company_id || 'none'}`, c.id])

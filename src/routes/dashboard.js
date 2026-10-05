@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -54,13 +55,13 @@ router.get('/', async (req, res) => {
       .select('*', { count: 'exact', head: true })
       .eq('assignee_id', req.teamMember.id)
       .neq('status', 'completada'),
-    supabase.from('deals').select('value, currency').eq('status', 'abierto'),
+    fetchAll(supabase.from('deals').select('value, currency').eq('status', 'abierto')),
     supabase.from('exchange_rates').select('*'),
-    supabase.from('deals').select('value, currency, pipelines(name)').eq('status', 'abierto'),
+    fetchAll(supabase.from('deals').select('value, currency, pipelines(name)').eq('status', 'abierto')),
     supabase.from('deals').select('title, value, currency, closed_at, companies(name)').eq('status', 'ganado').order('closed_at', { ascending: false }).limit(5),
     // Ventas (tratos ganados, todo el historial) agrupadas por embudo — para saber cuál
     // pipeline vende más, a diferencia de pipeline_breakdown que es sobre lo abierto.
-    supabase.from('deals').select('value, currency, pipeline_id, pipelines(name)').eq('status', 'ganado'),
+    fetchAll(supabase.from('deals').select('value, currency, pipeline_id, pipelines(name)').eq('status', 'ganado')),
     // Ranking de productos por ingresos reales — mismo cálculo que /api/metrics/products,
     // pero embebido aquí (esa ruta es __admin_only__ y el Dashboard es para todo el equipo).
     supabase
