@@ -24,6 +24,7 @@ router.get('/', async (req, res) => {
     .from('contacts')
     .select(`*, ${companiesSelect}, team_members!contacts_owner_id_fkey(full_name)`, { count: 'exact' })
     .order('created_at', { ascending: false })
+    .order('id')
     .range(from, to);
 
   if (status) query = query.eq('status', status);

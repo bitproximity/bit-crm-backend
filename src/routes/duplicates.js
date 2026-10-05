@@ -25,11 +25,20 @@ router.get('/companies', async (req, res) => {
 // GET /api/duplicates/contacts — agrupa por email exacto (la señal más confiable) y,
 // aparte, por nombre completo normalizado + misma empresa (para contactos sin email).
 router.get('/contacts', async (req, res) => {
-  const { data: contacts, error } = await supabase
-    .from('contacts')
-    .select('id, first_name, last_name, email, phone, company_id, created_at, companies(name), deals(count)')
-    .order('created_at');
-  if (error) return res.status(500).json({ error: error.message });
+  // Paginado de a 1000 (límite de PostgREST): antes solo se revisaban los primeros 1000
+  // contactos y los duplicados del resto no aparecían nunca.
+  const contacts = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('id, first_name, last_name, email, phone, company_id, created_at, companies(name), deals(count)')
+      .order('created_at')
+      .order('id')
+      .range(from, from + 999);
+    if (error) return res.status(500).json({ error: error.message });
+    contacts.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
 
   const byEmail = {};
   const byNameCompany = {};

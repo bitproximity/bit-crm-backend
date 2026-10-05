@@ -258,7 +258,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ search, limit, offset }) => {
-      let query = supabase.from('companies').select('id, name, industry, country', { count: 'exact' }).order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+      let query = supabase.from('companies').select('id, name, industry, country', { count: 'exact' }).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
       if (search) query = query.ilike('name', `%${search}%`);
       const { data, error, count } = await query;
       if (error) return errorResult(error.message);

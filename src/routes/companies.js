@@ -18,6 +18,7 @@ router.get('/', async (req, res) => {
     .from('companies')
     .select('*, team_members(full_name)', { count: 'exact' })
     .order('created_at', { ascending: false })
+    .order('id')
     .range(from, to);
 
   if (search) query = query.ilike('name', `%${search}%`);

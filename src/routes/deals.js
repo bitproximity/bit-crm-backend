@@ -86,6 +86,7 @@ router.get('/', async (req, res) => {
       .from('deals')
       .select('*, contacts(first_name,last_name), companies(name,country), pipeline_stages(name,position), pipelines(name)')
       .order('updated_at', { ascending: false })
+      .order('id') // desempate estable: sin esto, tratos con el mismo updated_at se repiten o desaparecen entre páginas
       .range(from, from + pageSize - 1);
 
     if (pipeline_id) query = query.eq('pipeline_id', pipeline_id);

@@ -42,6 +42,7 @@ async function findDuplicateCompanyGroups() {
       .from('companies')
       .select('id, name, industry, country, created_at, deals(count), contacts(count)')
       .order('created_at')
+      .order('id') // desempate: miles de empresas importadas comparten created_at
       .range(from, from + 999);
     if (error) throw new Error(error.message);
     all.push(...(data || []));
@@ -78,7 +79,7 @@ function cleanName(name) {
 async function loadCompanyMap() {
   const map = new Map();
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase.from('companies').select('id, name').order('created_at').range(from, from + 999);
+    const { data, error } = await supabase.from('companies').select('id, name').order('created_at').order('id').range(from, from + 999);
     if (error) throw new Error(error.message);
     (data || []).forEach((c) => {
       const key = normalizeCompanyName(c.name);
