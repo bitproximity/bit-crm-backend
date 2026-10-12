@@ -31,6 +31,19 @@ const router = express.Router();
 // 2) Proxy hacia la API de Anthropic (búsqueda con Apollo/Lusha, Maps/web,
 //    Instagram, LinkedIn, señales de intención)
 // ---------------------------------------------------------------------------
+const { requireAuth } = require('../middleware/auth');
+const native = require('./prospectingNative');
+
+// Página "Prospección" del CRM: manda { provider, title|department, country } (sin prompt).
+router.post('/import', requireAuth, native.importCandidates);
+
+router.post('/search', async (req, res, next) => {
+  if (req.body && req.body.provider && !req.body.prompt) {
+    return requireAuth(req, res, () => native.search(req, res));
+  }
+  return next();
+});
+
 router.post('/search', async (req, res) => {
   try {
     const { prompt, mcp_servers, tools } = req.body;

@@ -12,7 +12,8 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('projects')
     .select('*, companies(name), team_members(full_name)')
-    .order('created_at', { ascending: false });
+    .order('name', { ascending: true })
+    .order('id');
 
   if (status) query = query.eq('status', status);
   if (type) query = query.eq('type', type);

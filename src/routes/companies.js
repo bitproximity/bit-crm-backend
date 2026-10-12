@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('companies')
     .select('*, team_members(full_name)', { count: 'exact' })
-    .order('created_at', { ascending: false })
+    .order('name', { ascending: true })
     .order('id')
     .range(from, to);
 

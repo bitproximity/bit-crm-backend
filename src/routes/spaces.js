@@ -8,7 +8,7 @@ router.use(requireAuth);
 // GET /api/spaces — lista espacios con conteo de proyectos
 router.get('/', async (req, res) => {
   const [{ data: spaces, error }, { data: projects }] = await Promise.all([
-    supabase.from('spaces').select('*').order('position'),
+    supabase.from('spaces').select('*').order('name').order('id'),
     supabase.from('projects').select('id, space_id'),
   ]);
 
@@ -28,7 +28,7 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
   const [{ data: space, error }, { data: projects }] = await Promise.all([
     supabase.from('spaces').select('*').eq('id', id).single(),
-    supabase.from('projects').select('*, companies(name)').eq('space_id', id).order('created_at', { ascending: false }),
+    supabase.from('projects').select('*, companies(name)').eq('space_id', id).order('name').order('id'),
   ]);
 
   if (error) return res.status(404).json({ error: 'Espacio no encontrado' });
