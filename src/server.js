@@ -58,6 +58,7 @@ app.use('/api/pipelines', require('./routes/pipelines'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/enrichment', require('./routes/enrichment'));
 app.use('/api/prospecting', require('./routes/prospecting'));
+app.use('/api/prospeccion-tool', require('./routes/prospeccionTool'));
 app.use('/api/deals', require('./routes/deals'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
