@@ -26,6 +26,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const { requirePage } = require('../middleware/pagePermissions');
 
 // Tolera que auth exporte { requireAuth } o la función directa, y que sea
 // un middleware (req,res,next) o una fábrica requireAuth().
@@ -34,7 +35,10 @@ const guard = mw.length >= 3 ? mw : mw();
 
 const fetchFn = global.fetch || require('node-fetch');
 const router = express.Router();
+// Solo admin: gasta créditos de Anthropic y comparte datos comerciales; ningún otro rol (ni el socio
+// externo de WiFi) debe poder usarla aunque tenga login.
 router.use(guard);
+router.use(requirePage('__admin_only__'));
 
 const who = (req) =>
   (req.teamMember && (req.teamMember.email || req.teamMember.name)) ||

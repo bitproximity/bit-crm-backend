@@ -198,4 +198,7 @@ router.post('/companies/:id/:provider', async (req, res) => {
   }
 });
 
+// Reutilizado por la importación de Prospección para revelar email/teléfono con la misma lógica.
+router.PROVIDERS = PROVIDERS;
+
 module.exports = router;

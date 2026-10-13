@@ -33,4 +33,13 @@ function requirePage(pageKey) {
   };
 }
 
-module.exports = { requirePage, isBlockedForUser, BLOCKABLE_PAGES };
+// Misma regla que requirePage, pero para usar dentro de una ruta (ej. decidir qué opciones
+// ofrecer o qué datos incluir según el rol, sin cortar toda la petición).
+function roleCanAccess(teamMember, pageKey) {
+  if (!teamMember || isBlockedForUser(teamMember, pageKey)) return false;
+  if (teamMember.role === 'admin') return true;
+  const allowed = ROLE_ALLOWED_PAGES[teamMember.role];
+  return !!(allowed && allowed.includes(pageKey));
+}
+
+module.exports = { requirePage, roleCanAccess, isBlockedForUser, BLOCKABLE_PAGES };
