@@ -1,19 +1,29 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { memo } = require('../utils/memo');
 
 const router = express.Router();
 router.use(requireAuth);
 
 // GET /api/pipelines — lista pipelines con sus stages ordenadas
 router.get('/', async (req, res) => {
-  const { data: pipelines, error } = await supabase
-    .from('pipelines')
-    .select('*, pipeline_stages(*)')
-    .order('position', { nullsFirst: false })
-    .order('created_at');
-
-  if (error) return res.status(500).json({ error: error.message });
+  // La estructura de pipelines/etapas casi nunca cambia: una consulta cada 30 s como máximo (y
+  // cualquier escritura la vacía). Se guarda SIN filtrar por rol; el filtro va después, por persona.
+  let pipelines;
+  try {
+    pipelines = await memo('pipelines:all', 30000, async () => {
+      const { data, error } = await supabase
+        .from('pipelines')
+        .select('*, pipeline_stages(*)')
+        .order('position', { nullsFirst: false })
+        .order('created_at');
+      if (error) throw error;
+      return data;
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
 
   pipelines.forEach((p) => p.pipeline_stages.sort((a, b) => a.position - b.position));
   // Socio externo restringido a Bit WiFi — no le mostramos ni los nombres de los demás

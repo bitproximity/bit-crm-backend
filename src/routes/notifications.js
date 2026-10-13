@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
+const { memo } = require('../utils/memo');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -22,13 +23,21 @@ router.get('/', async (req, res) => {
 
 // GET /api/notifications/unread-count — payload chico para el globito, se puede pedir seguido
 router.get('/unread-count', async (req, res) => {
-  const { count, error } = await supabase
-    .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('recipient_id', req.teamMember.id)
-    .eq('read', false);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ count: count || 0 });
+  try {
+    // Varias pestañas/pantallas lo piden a la vez: una sola consulta cada 5 s por persona.
+    const count = await memo(`unread:${req.teamMember.id}`, 5000, async () => {
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('recipient_id', req.teamMember.id)
+        .eq('read', false);
+      if (error) throw error;
+      return count || 0;
+    });
+    res.json({ count });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // PATCH /api/notifications/:id  { read: true }

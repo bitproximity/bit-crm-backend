@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
+const { memo } = require('../utils/memo');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -10,8 +11,16 @@ router.use(requireAuth);
 // restringido. Antes tenía requirePage('__admin_only__'), que bloqueaba con 403 a
 // cualquiera que no fuera admin, incluyendo roles 'operaciones' y 'outbound'.
 
-// GET /api/dashboard — resumen para la vista principal
+// GET /api/dashboard — resumen para la vista principal.
+// Se calcula una sola vez por persona aunque la pantalla lo pida varias veces seguidas (el
+// navegador lo pide al entrar, al enfocar la ventana, etc.), y se guarda 20 s como máximo: cualquier
+// escritura en el CRM vacía la caché (server.js), así que un número nunca queda viejo tras un cambio.
 router.get('/', async (req, res) => {
+  const body = await memo(`dashboard:${req.teamMember.id}`, 20000, () => buildDashboard(req.teamMember));
+  res.json(body);
+});
+
+async function buildDashboard(teamMember) {
   const [
     { count: openDeals },
     { count: wonThisMonth },
@@ -20,7 +29,6 @@ router.get('/', async (req, res) => {
     { count: overdueTasks },
     { count: teamPendingTasks },
     { count: myOpenTasks },
-    { data: valueRows },
     { data: rates },
     { data: pipelineValueRows },
     { data: wonRecentRows },
@@ -53,9 +61,8 @@ router.get('/', async (req, res) => {
     supabase
       .from('tasks')
       .select('*', { count: 'exact', head: true })
-      .eq('assignee_id', req.teamMember.id)
+      .eq('assignee_id', teamMember.id)
       .neq('status', 'completada'),
-    fetchAll(supabase.from('deals').select('value, currency').eq('status', 'abierto')),
     supabase.from('exchange_rates').select('*'),
     fetchAll(supabase.from('deals').select('value, currency, pipelines(name)').eq('status', 'abierto')),
     supabase.from('deals').select('title, value, currency, closed_at, companies(name)').eq('status', 'ganado').order('closed_at', { ascending: false }).limit(5),
@@ -72,7 +79,9 @@ router.get('/', async (req, res) => {
 
   const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
   const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
-  const openPipelineValueUsd = (valueRows || []).reduce((sum, d) => sum + toUsd(d.value, d.currency), 0);
+  // El valor total abierto sale de las mismas filas que el desglose por pipeline (antes era una
+  // consulta aparte idéntica).
+  const openPipelineValueUsd = (pipelineValueRows || []).reduce((sum, d) => sum + toUsd(d.value, d.currency), 0);
 
   const byPipeline = {};
   (pipelineValueRows || []).forEach((d) => {
@@ -120,7 +129,7 @@ router.get('/', async (req, res) => {
     .map((p) => ({ name: p.name, revenue_usd: Math.round(p.revenue_usd), quantity: p.quantity }))
     .sort((a, b) => b.revenue_usd - a.revenue_usd)[0] || null;
 
-  res.json({
+  return {
     open_deals: openDeals || 0,
     won_this_month: wonThisMonth || 0,
     lost_this_month: lostThisMonth || 0,
@@ -133,8 +142,8 @@ router.get('/', async (req, res) => {
     recent_wins: recentWins,
     top_pipeline_by_sales: topPipelineBySales,
     top_product_by_sales: topProductBySales,
-  });
-});
+  };
+}
 
 function firstDayOfMonth() {
   const d = new Date();

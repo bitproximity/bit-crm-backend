@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { google } = require('googleapis');
 const { getOAuthClient, GMAIL_SCOPES } = require('../config/googleOAuth');
 const { requireAuth } = require('../middleware/auth');
+const { memo } = require('../utils/memo');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -432,52 +433,65 @@ router.get('/contacts', async (req, res) => {
 router.get('/calendar/events', async (req, res) => {
   const days = Number(req.query.days) || 14;
 
-  const { data: conns } = await supabase
-    .from('gmail_connections')
-    .select('*')
-    .eq('team_member_id', req.teamMember.id)
-    .order('id', { ascending: true });
-
-  if (!conns || conns.length === 0) return res.status(400).json({ error: 'No has conectado tu cuenta de Google todavía' });
-
   try {
-    const timeMin = new Date().toISOString();
-    const timeMax = new Date(Date.now() + days * 86400000).toISOString();
+    // Google Calendar es lo más lento del Dashboard (cada cuenta pide un token y luego los eventos):
+    // las cuentas se consultan EN PARALELO (antes una tras otra) y el resultado se recuerda 90 s por
+    // persona. Crear/editar un evento desde el CRM vacía la caché (server.js).
+    const events = await memo(`calendar:${req.teamMember.id}:${days}`, 90000, async () => {
+      const { data: conns } = await supabase
+        .from('gmail_connections')
+        .select('*')
+        .eq('team_member_id', req.teamMember.id)
+        .order('id', { ascending: true });
 
-    let events = [];
-    for (const conn of conns) {
-      try {
-        const client = getOAuthClient();
-        client.setCredentials({ refresh_token: conn.refresh_token });
-        const calendar = google.calendar({ version: 'v3', auth: client });
-
-        const { data } = await calendar.events.list({
-          calendarId: 'primary',
-          timeMin,
-          timeMax,
-          singleEvents: true,
-          orderBy: 'startTime',
-          maxResults: 50,
-        });
-
-        events = events.concat((data.items || []).map((e) => ({
-          id: e.id,
-          title: e.summary,
-          start: e.start?.dateTime || e.start?.date,
-          end: e.end?.dateTime || e.end?.date,
-          attendees: (e.attendees || []).map((a) => a.email),
-          location: e.location,
-          meetLink: e.hangoutLink,
-          account: conn.email,
-        })));
-      } catch (accountErr) {
-        console.error(`Error consultando el calendario de ${conn.email}:`, accountErr.message);
+      if (!conns || conns.length === 0) {
+        const e = new Error('No has conectado tu cuenta de Google todavía');
+        e.code = 'NO_GOOGLE';
+        throw e; // los errores no se recuerdan
       }
-    }
 
-    events.sort((a, b) => new Date(a.start) - new Date(b.start));
+      const timeMin = new Date().toISOString();
+      const timeMax = new Date(Date.now() + days * 86400000).toISOString();
+
+      const perAccount = await Promise.all(conns.map(async (conn) => {
+        try {
+          const client = getOAuthClient();
+          client.setCredentials({ refresh_token: conn.refresh_token });
+          const calendar = google.calendar({ version: 'v3', auth: client });
+
+          const { data } = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin,
+            timeMax,
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 50,
+          });
+
+          return (data.items || []).map((e) => ({
+            id: e.id,
+            title: e.summary,
+            start: e.start?.dateTime || e.start?.date,
+            end: e.end?.dateTime || e.end?.date,
+            attendees: (e.attendees || []).map((a) => a.email),
+            location: e.location,
+            meetLink: e.hangoutLink,
+            account: conn.email,
+          }));
+        } catch (accountErr) {
+          console.error(`Error consultando el calendario de ${conn.email}:`, accountErr.message);
+          return [];
+        }
+      }));
+
+      const merged = perAccount.flat();
+      merged.sort((a, b) => new Date(a.start) - new Date(b.start));
+      return merged;
+    });
+
     res.json(events);
   } catch (err) {
+    if (err.code === 'NO_GOOGLE') return res.status(400).json({ error: err.message });
     console.error('Error consultando Google Calendar:', err);
     res.status(500).json({ error: `Error consultando el calendario: ${err.message}` });
   }

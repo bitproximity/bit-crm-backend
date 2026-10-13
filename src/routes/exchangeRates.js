@@ -1,14 +1,23 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { memo } = require('../utils/memo');
 
 const router = express.Router();
 router.use(requireAuth);
 
+// Cambian muy pocas veces al día: se recuerdan 60 s (cualquier escritura vacía la caché).
 router.get('/', async (req, res) => {
-  const { data, error } = await supabase.from('exchange_rates').select('*').order('currency');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    const data = await memo('exchange_rates', 60000, async () => {
+      const { data, error } = await supabase.from('exchange_rates').select('*').order('currency');
+      if (error) throw error;
+      return data;
+    });
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST /api/exchange-rates  { currency, rate_to_usd }  — solo admin, crea o actualiza

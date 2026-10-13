@@ -8,6 +8,9 @@ require('dotenv').config();
 require('express-async-errors');
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
+const { clearAll: clearMemo } = require('./utils/memo');
+const { clearAuthCache } = require('./middleware/auth');
 
 const app = express();
 
@@ -31,6 +34,17 @@ app.use(
     origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
   })
 );
+// Compresión de respuestas (gzip/brotli): una lista de tratos pasa de ~106 KB a ~17 KB, y las
+// respuestas del dashboard/pipelines/empresas a una décima parte. No se toca /mcp ni nada que
+// sea un flujo (text/event-stream), y los archivos ya comprimidos (PDF, imágenes) se saltan solos.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.path.startsWith('/mcp') || req.headers['x-no-compression']) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -41,6 +55,26 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // navegador, que solo controla el caché del propio navegador.
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  next();
+});
+
+// Cualquier escritura vacía la caché de corta vida (utils/memo.js): quien guarda un cambio nunca
+// ve datos viejos en la siguiente lectura. Se vacía al empezar y al terminar la escritura, y las
+// lecturas que estaban en vuelo en ese momento no se guardan. Las búsquedas (POST pero de solo
+// lectura) no vacían nada. Si cambia un usuario, su rol/bloqueos o una API key, también se
+// olvida lo recordado de las sesiones, para que el cambio se aplique de inmediato.
+const READ_ONLY_POSTS = new Set(['/api/prospecting/search', '/api/prospeccion-tool/search']);
+const AUTH_AFFECTING = /^\/api\/(team|mcp-keys|role-permissions)/;
+app.use((req, res, next) => {
+  const isWrite = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE';
+  if (isWrite && !READ_ONLY_POSTS.has(req.path)) {
+    const flush = () => {
+      clearMemo();
+      if (AUTH_AFFECTING.test(req.originalUrl) || req.path === '/mcp') clearAuthCache();
+    };
+    flush();
+    res.on('finish', flush);
+  }
   next();
 });
 
