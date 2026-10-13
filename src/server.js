@@ -34,6 +34,10 @@ app.use(
   cors({
     origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
     exposedHeaders: ['Server-Timing'], // para poder leer los tiempos desde el navegador
+    // Cada petición con Authorization hace antes una consulta OPTIONS de verificación (preflight) = un
+    // viaje de red extra (~90 ms desde Panamá). Sin esta cabecera el navegador la repite casi siempre
+    // (por defecto la recuerda solo 5 s); con ella la recuerda 2 horas (el máximo de Chrome) por URL.
+    maxAge: 7200,
   })
 );
 app.use(requestTiming.middleware);
