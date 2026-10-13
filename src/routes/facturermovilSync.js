@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { canonicalAccountName } = require('../utils/accountNames');
+const { knownExternalIds } = require('../utils/knownExternalIds');
 
 router.use(requireAuth);
 router.use(require('../middleware/pagePermissions').requirePage('facturacion'));
@@ -91,14 +92,14 @@ async function syncFacturermovil(actorId) {
 
     const sourceKey = `facturero_movil:${account.index}`;
     let created = 0, skipped = 0, fuera_de_rango = 0;
+    const known = await knownExternalIds(sourceKey); // una consulta por cuenta, en vez de una por documento
     for (const doc of docs) {
       if (doc.codigoSri !== '01') continue; // solo facturas — no notas de crédito/débito/retenciones
       const issueDate = (doc.fechaEmision || '').slice(0, 10); // "2021-06-07T00:00:00-05:00" -> "2021-06-07"
       const year = Number(issueDate.slice(0, 4));
       if (!year || year < MIN_YEAR) { fuera_de_rango++; continue; }
 
-      const { data: existing } = await supabase.from('invoices').select('id').eq('external_source', sourceKey).eq('external_id', String(doc.id)).maybeSingle();
-      if (existing) { skipped++; continue; }
+      if (known.has(String(doc.id))) { skipped++; continue; }
 
       const { error } = await insertInvoiceTolerant({
         invoice_number: doc.numeroDocumento,
@@ -117,7 +118,7 @@ async function syncFacturermovil(actorId) {
         external_id: String(doc.id),
         created_by: actorId,
       });
-      if (!error) created++;
+      if (!error) { created++; known.add(String(doc.id)); }
     }
 
     perAccount.push({ account: account.name, created, skipped, fuera_de_rango, total_en_cuenta: docs.length });

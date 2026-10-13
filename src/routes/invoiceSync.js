@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { knownExternalIds } = require('../utils/knownExternalIds');
 const { canonicalAccountName } = require('../utils/accountNames');
 
 router.use(requireAuth);
@@ -57,10 +58,10 @@ async function syncStripe(actorId) {
   }
 
   let created = 0, skipped = 0;
+  const known = await knownExternalIds('stripe'); // una consulta, en vez de una por factura
   for (const inv of allInvoices) {
     if (inv.status === 'draft') continue;
-    const { data: existing } = await supabase.from('invoices').select('id').eq('external_source', 'stripe').eq('external_id', inv.id).maybeSingle();
-    if (existing) { skipped++; continue; }
+    if (known.has(String(inv.id))) { skipped++; continue; }
 
     const name = inv.customer_name || 'Sin nombre';
     const email = inv.customer_email || 'sin email';
@@ -81,7 +82,7 @@ async function syncStripe(actorId) {
       external_id: inv.id,
       created_by: actorId,
     });
-    if (!error) created++;
+    if (!error) { created++; known.add(String(inv.id)); }
   }
 
   if (actorId) await logAudit('invoice_sync', null, 'stripe_sync', actorId, { created, skipped });
@@ -128,9 +129,9 @@ async function syncAlegra(actorId) {
 
     const sourceKey = `alegra:${account.index}`;
     let created = 0, skipped = 0;
+    const known = await knownExternalIds(sourceKey); // una consulta por cuenta, en vez de una por factura
     for (const inv of all) {
-      const { data: existing } = await supabase.from('invoices').select('id').eq('external_source', sourceKey).eq('external_id', String(inv.id)).maybeSingle();
-      if (existing) { skipped++; continue; }
+      if (known.has(String(inv.id))) { skipped++; continue; }
 
       const { error } = await insertInvoiceTolerant({
         invoice_number: inv.numberTemplate?.fullNumber || inv.numberTemplate?.formattedNumber || String(inv.id),
@@ -149,7 +150,7 @@ async function syncAlegra(actorId) {
         external_id: String(inv.id),
         created_by: actorId,
       });
-      if (!error) created++;
+      if (!error) { created++; known.add(String(inv.id)); }
     }
 
     perAccount.push({ account: account.name, created, skipped, total_en_alegra: all.length });

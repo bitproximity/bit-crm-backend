@@ -17,6 +17,8 @@ create index if not exists idx_deal_line_items_product on deal_line_items (produ
 create index if not exists idx_team_members_auth_user on team_members (auth_user_id);
 -- Cada validación de API key (MCP / herramientas) busca por el hash
 create index if not exists idx_mcp_api_keys_hash on mcp_api_keys (key_hash) where revoked_at is null;
+-- Sincronización de facturas: lectura de lo ya importado por fuente (external_source + external_id)
+create index if not exists idx_invoices_external on invoices (external_source, external_id);
 -- Listas: contactos de una etiqueta
 create index if not exists idx_taggables_tag_entity on taggables (tag_id, entity_type);
 
@@ -24,3 +26,4 @@ create index if not exists idx_taggables_tag_entity on taggables (tag_id, entity
 analyze deals;
 analyze deal_line_items;
 analyze taggables;
+analyze invoices;
