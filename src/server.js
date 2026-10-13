@@ -11,6 +11,7 @@ const cors = require('cors');
 const compression = require('compression');
 const { clearAll: clearMemo } = require('./utils/memo');
 const { clearAuthCache } = require('./middleware/auth');
+const requestTiming = require('./utils/requestTiming');
 
 const app = express();
 
@@ -32,8 +33,10 @@ const allowedOrigins = (process.env.FRONTEND_ORIGIN || '*')
 app.use(
   cors({
     origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
+    exposedHeaders: ['Server-Timing'], // para poder leer los tiempos desde el navegador
   })
 );
+app.use(requestTiming.middleware);
 // Compresión de respuestas (gzip/brotli): una lista de tratos pasa de ~106 KB a ~17 KB, y las
 // respuestas del dashboard/pipelines/empresas a una décima parte. No se toca /mcp ni nada que
 // sea un flujo (text/event-stream), y los archivos ya comprimidos (PDF, imágenes) se saltan solos.

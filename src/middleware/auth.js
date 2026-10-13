@@ -1,5 +1,6 @@
 const supabase = require('../config/supabase');
 const crypto = require('crypto');
+const { addAuthTime } = require('../utils/requestTiming');
 
 // Evita repetir la validación (2 round-trips de red a Supabase) cuando el mismo token hace
 // varias llamadas — cada pantalla del CRM dispara varias de una vez.
@@ -127,12 +128,14 @@ async function requireAuth(req, res, next) {
       return next();
     }
 
+    const authStart = Date.now();
     let pending = authInflight.get(token);
     if (!pending) {
       pending = resolveToken(token).finally(() => authInflight.delete(token));
       authInflight.set(token, pending);
     }
     const result = await pending;
+    addAuthTime(Date.now() - authStart);
 
     if (result.error) {
       if (result.status === 401) addAuthHeader();

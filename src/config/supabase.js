@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { timedFetch } = require('../utils/requestTiming');
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error(
@@ -12,7 +13,8 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
+  // timedFetch: mide cuánto tarda cada consulta a la base (se ve en el encabezado Server-Timing)
+  { auth: { persistSession: false }, global: { fetch: timedFetch } }
 );
 
 module.exports = supabase;
