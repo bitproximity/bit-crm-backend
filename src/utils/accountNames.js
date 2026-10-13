@@ -27,4 +27,12 @@ function canonicalAccountName(name) {
   return found || clean;
 }
 
-module.exports = { canonicalAccountName, KNOWN_ACCOUNT_NAMES };
+// Regla de negocio (13/10/2026): toda factura de Alegra cuyo número EMPIEZA con "B2" pertenece a
+// "Mario Colombia", sin importar de cuál cuenta de Alegra venga. Cualquier otra conserva el origen
+// de su cuenta. Solo aplica a Alegra (Stripe y Facturero Móvil no pasan por aquí).
+const MARIO_COLOMBIA = 'Mario Colombia';
+function alegraOriginFor(invoiceNumber, accountName) {
+  return /^B2/i.test(String(invoiceNumber || '').trim()) ? MARIO_COLOMBIA : accountName;
+}
+
+module.exports = { canonicalAccountName, alegraOriginFor, KNOWN_ACCOUNT_NAMES, MARIO_COLOMBIA };

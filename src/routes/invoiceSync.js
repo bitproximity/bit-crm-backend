@@ -4,7 +4,7 @@ const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { knownExternalIds } = require('../utils/knownExternalIds');
-const { canonicalAccountName } = require('../utils/accountNames');
+const { canonicalAccountName, alegraOriginFor } = require('../utils/accountNames');
 
 router.use(requireAuth);
 router.use(require('../middleware/pagePermissions').requirePage('facturacion'));
@@ -133,8 +133,10 @@ async function syncAlegra(actorId) {
     for (const inv of all) {
       if (known.has(String(inv.id))) { skipped++; continue; }
 
+      const invoiceNumber = inv.numberTemplate?.fullNumber || inv.numberTemplate?.formattedNumber || String(inv.id);
+      const origin = alegraOriginFor(invoiceNumber, account.name); // "B2…" → Mario Colombia
       const { error } = await insertInvoiceTolerant({
-        invoice_number: inv.numberTemplate?.fullNumber || inv.numberTemplate?.formattedNumber || String(inv.id),
+        invoice_number: invoiceNumber,
         currency: 'COP',
         subtotal: Number(inv.subtotal || 0),
         tax: Number(inv.tax || 0),
@@ -143,9 +145,9 @@ async function syncAlegra(actorId) {
         status: alegraStatus(inv),
         issue_date: inv.date,
         due_date: inv.dueDate || inv.date,
-        notes: `Importado de Alegra (${account.name}) - ${inv.client?.name || 'Sin nombre'}`,
+        notes: `Importado de Alegra (${origin}) - ${inv.client?.name || 'Sin nombre'}`,
         client_name: inv.client?.name || null,
-        source_account: account.name,
+        source_account: origin,
         external_source: sourceKey,
         external_id: String(inv.id),
         created_by: actorId,
