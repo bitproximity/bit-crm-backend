@@ -7,14 +7,26 @@
 const LEGACY = 'Bit Signage / Neomedia';
 const LEGACY_LABEL = 'Bit Signage / Neomedia (sin separar)';
 
+// Decisión del 14/10/2026 sobre productos repetidos del catálogo: se quedan Bit Signage, Cartelería Digital
+// (Neomedia) y WhatsApp Marketing; los otros tres se fusionan en ellos (script 057). Estos alias hacen que
+// las métricas cuenten igual aunque algún trato todavía tenga el nombre viejo, y que el embudo Neomedia
+// se cuente con el nombre del producto elegido.
+const NEOMEDIA = 'Cartelería Digital (Neomedia)';
+const ALIASES = {
+  'neomedia': NEOMEDIA,
+  'bit signage (digital signage)': 'Bit Signage',
+  'whatsapp': 'WhatsApp Marketing',
+};
+const canonical = (name) => ALIASES[String(name).trim().toLowerCase()] || name;
+
 function productOfDeal(deal) {
   const line = String(deal?.product_line || '').trim();
   const pipeline = String(deal?.pipelines?.name || deal?.pipeline_name || '');
-  if (line === LEGACY) return /neomedia/i.test(pipeline) ? 'Neomedia' : LEGACY_LABEL;
-  if (line) return line;
+  if (line === LEGACY) return /neomedia/i.test(pipeline) ? NEOMEDIA : LEGACY_LABEL;
+  if (line) return canonical(line);
   if (/wifi/i.test(pipeline)) return 'Bit WiFi';
   if (/music/i.test(pipeline)) return 'Bit Music';
-  if (/neomedia/i.test(pipeline)) return 'Neomedia';
+  if (/neomedia/i.test(pipeline)) return NEOMEDIA;
   if (/signage|cartel/i.test(pipeline)) return 'Bit Signage';
   return 'Sin especificar';
 }
