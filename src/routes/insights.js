@@ -4,6 +4,7 @@ const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { resolveDealCountry } = require('../utils/pipelineCountry');
+const { buildProductInsights } = require('../utils/productOfDeal');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -202,7 +203,7 @@ router.get('/dashboard', async (req, res) => {
 
   let dealsQuery = supabase
     .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, hardware_type, created_at, closed_at, lost_reason, facturacion, companies(country), pipelines(name)');
+    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, hardware_type, product_line, created_at, closed_at, lost_reason, facturacion, companies(country), pipelines(name)');
   if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
 
   const [{ data: deals, error }, { data: rates }] = await Promise.all([
@@ -412,6 +413,9 @@ router.get('/dashboard', async (req, res) => {
     }))
     .sort((a, b) => b.won_value_usd - a.won_value_usd);
 
+  // ── Producto: ganado y pipeline abierto por producto (catálogo o, si falta, el que dice el embudo) ──
+  const product_insights = buildProductInsights(deals, toUsd);
+
   // ── Deals won over time: valor de deals ganados por mes de cierre ──
   const wonByMonth = {};
   months.forEach((m) => { wonByMonth[m] = 0; });
@@ -435,6 +439,7 @@ router.get('/dashboard', async (req, res) => {
     sales_by_facturacion,
     mrr_arr,
     hardware_insights,
+    product_insights,
     mrr_by_country_pipeline,
     deals_won_by_month,
   });

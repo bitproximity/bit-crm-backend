@@ -5,6 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
 const { sendEmail } = require('../utils/email');
 const { syncTaskToCalendar, deleteTaskFromCalendar } = require('../utils/googleCalendarSync');
+const { cleanMeetingUrl, withMeetingUrlFallback } = require('../utils/meetingUrl');
 const { createNotification } = require('../utils/notify');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
@@ -50,7 +51,8 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const payload = { ...req.body, created_by: req.teamMember.id };
-  const { data, error } = await supabase.from('tasks').insert(payload).select().single();
+  if ('meeting_url' in payload) payload.meeting_url = cleanMeetingUrl(payload.meeting_url);
+  const { data, error } = await withMeetingUrlFallback((p) => supabase.from('tasks').insert(p).select().single(), payload);
   if (error) return res.status(400).json({ error: error.message });
 
   await logAudit('task', data.id, 'created', req.teamMember.id);
@@ -69,17 +71,16 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
   const updates = { ...req.body };
+  if ('meeting_url' in updates) updates.meeting_url = cleanMeetingUrl(updates.meeting_url);
 
   if (updates.status === 'completada') updates.completed_at = new Date().toISOString();
 
   const { data: before } = await supabase.from('tasks').select('assignee_id').eq('id', id).maybeSingle();
 
-  const { data, error } = await supabase
-    .from('tasks')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
+  const { data, error } = await withMeetingUrlFallback(
+    (u) => supabase.from('tasks').update(u).eq('id', id).select().single(),
+    updates
+  );
 
   if (error) return res.status(400).json({ error: error.message });
 
@@ -88,7 +89,7 @@ router.patch('/:id', async (req, res) => {
   res.json(data);
 
   // Si cambió fecha, responsable, estado o título, refleja el cambio en Google Calendar
-  const relevantFields = ['due_date', 'assignee_id', 'status', 'title', 'priority'];
+  const relevantFields = ['due_date', 'assignee_id', 'status', 'title', 'priority', 'meeting_url'];
   if (relevantFields.some((f) => f in req.body)) syncTaskToCalendar(data);
 
   if ('assignee_id' in req.body && data.assignee_id !== before?.assignee_id && data.assignee_id && data.assignee_id !== req.teamMember.id) {

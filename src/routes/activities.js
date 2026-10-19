@@ -4,6 +4,7 @@ const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { isBlockedForUser } = require('../middleware/pagePermissions');
 const { syncActivityToCalendar, getCalendarClientForUser } = require('../utils/googleCalendarSync');
+const { cleanMeetingUrl, withMeetingUrlFallback } = require('../utils/meetingUrl');
 const { sendEmail } = require('../utils/email');
 const { createNotification } = require('../utils/notify');
 
@@ -79,7 +80,8 @@ router.get('/for/:entity_type/:entity_id', async (req, res) => {
 // POST /api/activities  { entity_type, entity_id, type, summary, occurred_at? }
 router.post('/', async (req, res) => {
   const payload = { ...req.body, author_id: req.teamMember.id };
-  const { data, error } = await supabase.from('activities').insert(payload).select().single();
+  if ('meeting_url' in payload) payload.meeting_url = cleanMeetingUrl(payload.meeting_url);
+  const { data, error } = await withMeetingUrlFallback((p) => supabase.from('activities').insert(p).select().single(), payload);
   if (error) return res.status(400).json({ error: error.message });
 
   // Fire-and-forget: si falla el calendario, la actividad ya quedó guardada de todas formas.
@@ -135,12 +137,12 @@ async function notifyMentions(body, author, activity) {
 
 // PATCH /api/activities/:id  { done?, title?, due_date?, summary? }
 router.patch('/:id', async (req, res) => {
-  const { data, error } = await supabase
-    .from('activities')
-    .update(req.body)
-    .eq('id', req.params.id)
-    .select()
-    .single();
+  const updates = { ...req.body };
+  if ('meeting_url' in updates) updates.meeting_url = cleanMeetingUrl(updates.meeting_url);
+  const { data, error } = await withMeetingUrlFallback(
+    (u) => supabase.from('activities').update(u).eq('id', req.params.id).select().single(),
+    updates
+  );
 
   if (error) return res.status(400).json({ error: error.message });
 

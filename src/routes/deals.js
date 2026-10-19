@@ -49,7 +49,7 @@ router.param('id', async (req, res, next, id) => {
 
 // GET /api/deals?pipeline_id=&owner_id=&status=&stage_id=&lost_reason=&created_month=YYYY-MM&closed_month=YYYY-MM
 router.get('/', async (req, res) => {
-  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month, country, facturacion, hardware_type, search, limit } = req.query;
+  const { pipeline_id, owner_id, status, stage_id, lost_reason, created_month, closed_month, country, facturacion, hardware_type, product_line, search, limit } = req.query;
 
   // Búsqueda rápida (ej. buscador de tratos para reasignar una actividad) — no pagina todo,
   // solo trae hasta "limit" resultados directo. Separado del loop de abajo, que sí está
@@ -66,6 +66,7 @@ router.get('/', async (req, res) => {
     if (facturacion === '__sin_especificar__') query = query.is('facturacion', null);
     else if (facturacion) query = query.eq('facturacion', facturacion);
     if (hardware_type) query = query.eq('hardware_type', hardware_type);
+    if (product_line) query = query.eq('product_line', product_line);
     if (search) query = query.ilike('title', `%${search}%`);
     let { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
@@ -96,6 +97,7 @@ router.get('/', async (req, res) => {
     if (facturacion === '__sin_especificar__') query = query.is('facturacion', null);
     else if (facturacion) query = query.eq('facturacion', facturacion);
     if (hardware_type) query = query.eq('hardware_type', hardware_type);
+    if (product_line) query = query.eq('product_line', product_line);
     if (stage_id) query = query.eq('stage_id', stage_id);
     if (lost_reason) {
       query = lost_reason === '(sin motivo)'

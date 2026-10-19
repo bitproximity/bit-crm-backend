@@ -2,7 +2,18 @@ const { google } = require('googleapis');
 const supabase = require('../config/supabase');
 const { getOAuthClient } = require('../config/googleOAuth');
 
+const { cleanMeetingUrl, meetingProvider } = require('./meetingUrl');
+
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
+
+// Si la tarea/actividad tiene link de reunión, el evento lo lleva en «Ubicación» (queda clicable en
+// Google Calendar) y en la descripción con el nombre del servicio.
+function meetingParts(entity) {
+  const url = cleanMeetingUrl(entity.meeting_url);
+  if (!url) return { location: undefined, text: '' };
+  const provider = meetingProvider(url);
+  return { location: url, text: `\n\n🔗 ${provider ? `Unirse a ${provider}` : 'Link de la reunión'}: ${url}` };
+}
 
 async function getCalendarClientForUser(teamMemberId) {
   // Cuenta "principal" (la primera conectada) — con varias cuentas de Google conectadas,
@@ -48,9 +59,11 @@ async function syncTaskToCalendar(task) {
     const start = new Date(task.due_date);
     const end = new Date(start.getTime() + 30 * 60000); // bloque de 30 min por defecto
 
+    const meet = meetingParts(task);
     const eventBody = {
       summary: `📋 ${task.title}`,
-      description: `Tarea de Bit CRM${task.priority && task.priority !== 'media' ? ` · Prioridad ${task.priority}` : ''}\n\nVer en el CRM: ${PUBLIC_APP_URL}/tasks`,
+      description: `Tarea de Bit CRM${task.priority && task.priority !== 'media' ? ` · Prioridad ${task.priority}` : ''}${meet.text}\n\nVer en el CRM: ${PUBLIC_APP_URL}/tasks`,
+      ...(meet.location ? { location: meet.location } : {}),
       start: { dateTime: start.toISOString() },
       end: { dateTime: end.toISOString() },
       reminders: {
@@ -124,9 +137,11 @@ async function syncActivityToCalendar(activity) {
     const end = new Date(start.getTime() + 30 * 60000); // bloque de 30 min por defecto
     const icon = ACTIVITY_TYPE_ICON[activity.type] || '📌';
 
+    const meet = meetingParts(activity);
     const eventBody = {
       summary: `${icon} ${activity.title || activity.summary || 'Actividad'}`,
-      description: `Actividad de Bit CRM (${activity.type})\n\nVer en el CRM: ${PUBLIC_APP_URL}/activities`,
+      description: `Actividad de Bit CRM (${activity.type})${meet.text}\n\nVer en el CRM: ${PUBLIC_APP_URL}/activities`,
+      ...(meet.location ? { location: meet.location } : {}),
       start: { dateTime: start.toISOString() },
       end: { dateTime: end.toISOString() },
       reminders: {

@@ -10,18 +10,25 @@ router.use(requireAuth);
 router.use(requirePage('empresas'));
 
 router.get('/', async (req, res) => {
-  const { search, page = 1, limit = 50 } = req.query;
+  const { search, country, industry, sort, page = 1, limit = 50 } = req.query;
   const from = (page - 1) * limit;
   const to = from + Number(limit) - 1;
 
+  // contacts(count) / deals(count): cuántos contactos y tratos tiene cada empresa, para mostrarlo en la
+  // lista sin pedir el detalle de cada una.
   let query = supabase
     .from('companies')
-    .select('*, team_members(full_name)', { count: 'exact' })
-    .order('name', { ascending: true })
-    .order('id')
-    .range(from, to);
+    .select('*, team_members(full_name), contacts(count), deals(count)', { count: 'exact' });
+
+  // Orden: A–Z por defecto; «recientes» pone primero las últimas creadas.
+  query = sort === 'recientes'
+    ? query.order('created_at', { ascending: false }).order('id')
+    : query.order('name', { ascending: true }).order('id');
+  query = query.range(from, to);
 
   if (search) query = query.ilike('name', `%${search}%`);
+  if (country) query = country === '__sin_especificar__' ? query.is('country', null) : query.eq('country', country);
+  if (industry) query = industry === '__sin_especificar__' ? query.is('industry', null) : query.eq('industry', industry);
 
   const { data, error, count } = await query;
   if (error) return res.status(500).json({ error: error.message });
