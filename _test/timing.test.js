@@ -1,0 +1,24 @@
+const express = require('express'); const cors = require('cors'); const http = require('http');
+const rt = require('../src/utils/requestTiming');
+const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) process.exitCode = 1; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url) => { await sleep(String(url).endsWith('/a') ? 40 : 70); return { ok: true }; };
+const app = express();
+app.use(cors({ origin: ['https://crm.bitproximity.com'], exposedHeaders: ['Server-Timing'] }));
+app.use(rt.middleware);
+app.get('/dos', async (req, res) => { rt.addAuthTime(12); await Promise.all([rt.timedFetch('http://x/a'), rt.timedFetch('http://x/b')]); res.json({ ok: 1 }); });
+app.get('/ninguna', (req, res) => res.json({ ok: 1 }));
+const srv = app.listen(0, async () => {
+  const port = srv.address().port;
+  const get = (p) => new Promise((resolve) => http.get({ port, path: p, headers: { Origin: 'https://crm.bitproximity.com' } }, (res) => { res.resume(); res.on('end', () => resolve(res.headers)); }));
+  const h = await get('/dos'); const st = h['server-timing'];
+  ok(/auth;dur=12\.0/.test(st), 'reporta el tiempo de validación de sesión: ' + st);
+  const db = /db;dur=([\d.]+);desc="(\d+) consultas, la mas lenta (\d+) ms"/.exec(st);
+  ok(db && +db[2] === 2 && +db[3] >= 65 && +db[1] >= 100, `suma 2 consultas (~110 ms), la más lenta ~70 ms → db=${db && db[1]}, n=${db && db[2]}, máx=${db && db[3]}`);
+  const total = +/total;dur=([\d.]+)/.exec(st)[1]; ok(total >= 65 && total < 400, 'total ≈ la consulta más lenta cuando van en paralelo: ' + total);
+  ok(/Server-Timing/i.test(h['access-control-expose-headers'] || ''), 'CORS expone Server-Timing al navegador');
+  const h2 = await get('/ninguna'); ok(/^total;dur=[\d.]+$/.test(h2['server-timing']), 'sin consultas solo informa el total: ' + h2['server-timing']);
+  const r = await rt.timedFetch('http://x/a'); ok(r.ok, 'fuera de una petición, timedFetch funciona sin romper nada');
+  globalThis.fetch = realFetch; srv.close();
+});
