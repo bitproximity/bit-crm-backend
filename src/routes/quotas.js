@@ -2,7 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
-const { BIT_PROSPECT_TEAM_EXCLUDE } = require('../utils/bitProspectTeam');
+const { isExcludedFromBitProspect } = require('../utils/bitProspectTeam');
 const { fetchAll } = require('../utils/fetchAll');
 const { computeProgress, previousMonth } = require('../utils/quotaProgress');
 
@@ -42,10 +42,11 @@ router.get('/', async (req, res) => {
 
   // Mismo criterio que /leaderboard: quien no hace prospección/reuniones para Bit Prospect
   // (soporte técnico, un socio externo) no debería aparecer con una meta de reuniones.
-  const team = (teamRes.data || []).filter((m) => !BIT_PROSPECT_TEAM_EXCLUDE.includes(m.full_name));
+  const team = (teamRes.data || []).filter((m) => !isExcludedFromBitProspect(m.full_name));
+  const ignored = (teamRes.data || []).filter((m) => isExcludedFromBitProspect(m.full_name));
   const quotas = quotasRes.data || [];
   const previous = new Map((prevRes.data || []).map((q) => [q.team_member_id, q.target_meetings]));
-  const { members, unmatched } = computeProgress([...(scheduledRes.data || []), ...(realizedRes.data || [])], team, month);
+  const { members, unmatched } = computeProgress([...(scheduledRes.data || []), ...(realizedRes.data || [])], team, month, ignored);
 
   const rows = team
     .map((m) => {

@@ -7,7 +7,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
 const { logAudit } = require('../utils/audit');
-const { BIT_PROSPECT_TEAM_EXCLUDE } = require('../utils/bitProspectTeam');
+const { isExcludedFromBitProspect } = require('../utils/bitProspectTeam');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -83,7 +83,7 @@ async function syncRecordToContact(record, clientName, ownerId) {
 // quotas.js para que ambos coincidan siempre.
 async function getBitProspectTeam() {
   const { data } = await supabase.from('team_members').select('full_name').eq('active', true);
-  return (data || []).filter((m) => !BIT_PROSPECT_TEAM_EXCLUDE.includes(m.full_name));
+  return (data || []).filter((m) => !isExcludedFromBitProspect(m.full_name));
 }
 
 // GET /api/b2b/clients — empresas marcadas como clientes del servicio

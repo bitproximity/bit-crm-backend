@@ -47,8 +47,11 @@ const inMonth = (value, month) => typeof value === 'string' && value.slice(0, 7)
 //   scheduled = reuniones con fecha PROGRAMADA dentro del mes   (lo que ya medía el panel)
 //   realized  = reuniones con fecha REALIZADA dentro del mes    (el resultado real)
 // Una misma fila puede contar en ambas si las dos fechas caen en el mes.
-function computeProgress(records, team, month) {
-  const match = buildMemberMatcher(team);
+// `ignore`: usuarios activos que NO son del equipo de prospección (p. ej. quien administra el CRM). Si el «Ejecutivo»
+// de una reunión nombra a uno de ellos se descarta en silencio — no es un nombre «sin usuario» ni debe avisar.
+function computeProgress(records, team, month, ignore = []) {
+  const match = buildMemberMatcher([...(team || []), ...ignore]);
+  const ignoreIds = new Set(ignore.map((m) => m.id));
   const members = {};
   (team || []).forEach((m) => { members[m.id] = { scheduled: 0, realized: 0, byClient: {} }; });
   const unmatched = {};
@@ -65,6 +68,7 @@ function computeProgress(records, team, month) {
 
     const executive = (r.executive || '').trim();
     let memberId = executive ? match(executive) : (r.created_by && members[r.created_by] ? r.created_by : null);
+    if (memberId && ignoreIds.has(memberId)) return;
 
     if (!memberId) {
       const name = executive || '(sin ejecutivo)';

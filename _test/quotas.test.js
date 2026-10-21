@@ -3,11 +3,12 @@ const Module = require('module'); const path = require('path'); const http = req
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) process.exitCode = 1; };
 
 // ── base simulada en memoria ──────────────────────────────────────────────────────────────────────
-const SOFIA = 'm-sofia'; const ANA = 'm-ana'; const ANDREA = 'm-andrea'; const DIEGO = 'm-diego'; const MARIO = 'm-mario';
+const SOFIA = 'm-sofia'; const ANA = 'm-ana'; const ANDREA = 'm-andrea'; const DIEGO = 'm-diego'; const MARIO = 'm-mario'; const MARTINA = 'm-martina'; const LAURA = 'm-laura';
 const db = {
   team_members: [
     { id: SOFIA, full_name: 'Sofía Florido', active: true }, { id: ANA, full_name: 'Ana Gabriela Espinel', active: true },
     { id: ANDREA, full_name: 'Andrea Calderón', active: true }, { id: DIEGO, full_name: 'Diego Molina', active: true }, { id: MARIO, full_name: 'Mario Ramos', active: true },
+    { id: MARTINA, full_name: 'Martina Villacreses', active: true }, { id: LAURA, full_name: 'Laura Gómez', active: true },
     { id: 'm-viejo', full_name: 'Persona Inactiva', active: false },
   ],
   sales_quotas: [], audit_log: [],
@@ -20,6 +21,11 @@ const db = {
     { id: 'r5', executive: 'Carolina', created_by: MARIO, meeting_date: '2026-10-08', realized_date: null, companies: { name: 'Periferia' } }, // todavía sin usuario en el CRM
     { id: 'r6', executive: 'Carolina', created_by: MARIO, meeting_date: '2026-10-09', realized_date: '2026-10-10T09:00:00+00:00', companies: { name: 'Periferia' } },
     { id: 'r7', executive: 'Sofia', created_by: MARIO, meeting_date: '2026-09-30', realized_date: '2026-10-02T09:00:00+00:00', companies: { name: 'Agape' } }, // programada en septiembre, realizada en octubre
+    // reuniones de personas que NO son del equipo de prospección: se ignoran sin avisar
+    { id: 'r10', executive: 'Mario Ramos', created_by: MARIO, meeting_date: '2026-10-14', realized_date: null, companies: { name: 'Agape' } },
+    { id: 'r11', executive: 'martina', created_by: MARIO, meeting_date: '2026-10-15', realized_date: null, companies: { name: 'Agape' } },
+    // sin «Ejecutivo» y cargada por alguien fuera del equipo: no es de nadie, y SÍ se avisa
+    { id: 'r12', executive: '', created_by: MARIO, meeting_date: '2026-10-16', realized_date: null, companies: { name: 'Agape' } },
     // otros meses: no deben contarse en octubre
     { id: 'r8', executive: 'Sofia', created_by: MARIO, meeting_date: '2026-11-02', realized_date: null, companies: { name: 'Agape' } },
     { id: 'r9', executive: 'Sofia', created_by: MARIO, meeting_date: '2026-08-15', realized_date: null, companies: { name: 'Agape' } },
@@ -67,8 +73,11 @@ Module._load = function (request) {
 
 // ── 1) atribución: nombres → personas ────────────────────────────────────────────────────────────
 const { normName, buildMemberMatcher, computeProgress, previousMonth } = require('../src/utils/quotaProgress');
+const { isExcludedFromBitProspect } = require('../src/utils/bitProspectTeam');
 ok(normName('  SOFÍA   Florido ') === 'sofia florido', 'normaliza mayúsculas, tildes y espacios');
-const team = db.team_members.filter((m) => m.active && !['Diego Molina'].includes(m.full_name));
+const team = db.team_members.filter((m) => m.active && !isExcludedFromBitProspect(m.full_name));
+const ignored = db.team_members.filter((m) => m.active && isExcludedFromBitProspect(m.full_name));
+ok(['Mario Ramos', 'mario  RAMOS', 'Martina Villacreses', 'Diego Molina', 'Jorge'].every(isExcludedFromBitProspect) && !['Sofía Florido', 'Ana Gabriela Espinel', 'Andrea Calderón', 'Laura Gómez'].some(isExcludedFromBitProspect), 'excluidos: Mario, Martina, Diego y Jorge (sin importar mayúsculas ni espacios); el equipo de prospección no');
 const match = buildMemberMatcher(team);
 ok(match('Sofia') === SOFIA && match('SOFÍA FLORIDO') === SOFIA, '«Sofia» y el nombre completo reconocen a Sofía Florido');
 ok(match('Ana Gabriela') === ANA && match('ana gabriela espinel') === ANA, '«Ana Gabriela» reconoce a Ana Gabriela Espinel');
@@ -78,12 +87,16 @@ ok(dosAna('Ana') === null && dosAna('Ana Gabriela') === 'a1' && dosAna('Ana Mar�
 ok(previousMonth('2026-01') === '2025-12' && previousMonth('2026-10') === '2026-09', 'mes anterior (cruza de año)');
 
 // ── 2) avance del mes ────────────────────────────────────────────────────────────────────────────
-const pr = computeProgress([...db.b2b_records, db.b2b_records[0]], team, '2026-10'); // r1 repetida a propósito
+const pr = computeProgress([...db.b2b_records, db.b2b_records[0]], team, '2026-10', ignored); // r1 repetida a propósito
 ok(pr.members[SOFIA].scheduled === 2 && pr.members[SOFIA].realized === 2, 'Sofía: 2 agendadas (r1, r2) y 2 realizadas en octubre (r1 y r7); la repetida cuenta una vez');
 ok(pr.members[ANA].scheduled === 1 && pr.members[ANA].realized === 1, 'Ana Gabriela: 1 agendada y 1 realizada');
 ok(pr.members[ANDREA].scheduled === 1, 'Andrea: sin «Ejecutivo» cuenta lo que ella cargó');
 ok(pr.members[SOFIA].byClient.Periferia.scheduled === 2 && pr.members[SOFIA].byClient.Agape.realized === 1, 'desglose por cliente');
-ok(pr.unmatched.length === 1 && pr.unmatched[0].name === 'Carolina' && pr.unmatched[0].scheduled === 2 && pr.unmatched[0].realized === 1, '«Carolina» (sin usuario) queda aparte con sus 2 agendadas y 1 realizada, no se pierde ni se asigna a otro');
+const carolina = pr.unmatched.find((u) => u.name === 'Carolina');
+ok(carolina && carolina.scheduled === 2 && carolina.realized === 1, '«Carolina» (sin usuario) queda aparte con sus 2 agendadas y 1 realizada, no se pierde ni se asigna a otro');
+ok(!pr.unmatched.some((u) => /mario|martina/i.test(u.name)), 'las reuniones cuyo «Ejecutivo» es Mario o Martina se ignoran en silencio (no salen como «sin usuario»)');
+ok(pr.unmatched.length === 2 && pr.unmatched.some((u) => u.name === '(sin ejecutivo)' && u.scheduled === 1), 'una reunión sin «Ejecutivo» cargada por alguien fuera del equipo sí queda marcada como «(sin ejecutivo)»');
+ok(computeProgress(db.b2b_records, team, '2026-10').unmatched.some((u) => /mario/i.test(u.name)), 'sin la lista de ignorados, «Mario Ramos» sí saldría como sin usuario (por eso se le pasa)');
 ok(pr.members[SOFIA].scheduled === computeProgress(db.b2b_records, team, '2026-10').members[SOFIA].scheduled, 'contar dos veces la misma fila no cambia el resultado');
 
 // ── 3) servicio ──────────────────────────────────────────────────────────────────────────────────
@@ -102,10 +115,12 @@ const srv = app.listen(0, async () => {
   ok(r.status === 200 && r.json.month === '2026-10', 'GET devuelve el mes pedido');
   const names = r.json.rows.map((x) => x.full_name);
   ok(!names.includes('Diego Molina') && !names.includes('Persona Inactiva'), 'no aparecen los excluidos de Bit Prospect ni los usuarios inactivos');
+  ok(!names.includes('Mario Ramos') && !names.includes('Martina Villacreses'), 'Mario y Martina ya no aparecen en la lista de metas');
+  ok(names.join('|') === 'Ana Gabriela Espinel|Andrea Calderón|Laura Gómez|Sofía Florido', 'la lista queda con las personas de prospección (más Carolina cuando tenga usuario)');
   ok(names.join('|') === [...names].sort((a, b) => a.localeCompare(b, 'es')).join('|'), 'ordenado alfabéticamente');
   const sofia = r.json.rows.find((x) => x.team_member_id === SOFIA);
   ok(sofia.scheduled === 2 && sofia.realized === 2 && sofia.actual === 2 && sofia.target === null, 'Sofía: avance correcto y sin meta todavía');
-  ok(r.json.unmatched.length === 1 && r.json.unmatched[0].name === 'Carolina', 'avisa de las reuniones de «Carolina» que no coinciden con ningún usuario');
+  ok(r.json.unmatched.some((u) => u.name === 'Carolina') && !r.json.unmatched.some((u) => /mario|martina/i.test(u.name)), 'avisa de «Carolina» (sin usuario) pero no de Mario ni de Martina');
   ok(r.json.totals.scheduled === 4 && r.json.totals.realized === 3 && r.json.totals.target === 0, 'totales del equipo (sin contar a Carolina): 4 agendadas, 3 realizadas');
 
   r = await call('GET', '/api/quotas?month=2026-13'); ok(r.status === 400, 'mes inválido → 400');
@@ -134,7 +149,7 @@ const srv = app.listen(0, async () => {
 
   r = await call('GET', '/api/quotas?month=2026-10');
   const por = (id) => r.json.rows.find((x) => x.team_member_id === id);
-  ok(por(SOFIA).target === 20 && por(ANA).target === 15 && por(ANDREA).target === 12 && por(MARIO).target === null, 'el GET devuelve cada meta con su avance');
+  ok(por(SOFIA).target === 20 && por(ANA).target === 15 && por(ANDREA).target === 12 && por(LAURA).target === null && por(MARIO) === undefined, 'el GET devuelve cada meta con su avance');
   ok(r.json.totals.target === 47, 'meta total del equipo = 47');
 
   // sobrescribir y quitar
