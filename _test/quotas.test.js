@@ -123,6 +123,11 @@ const srv = app.listen(0, async () => {
   ok(r.json.unmatched.some((u) => u.name === 'Carolina') && !r.json.unmatched.some((u) => /mario|martina/i.test(u.name)), 'avisa de «Carolina» (sin usuario) pero no de Mario ni de Martina');
   ok(r.json.totals.scheduled === 4 && r.json.totals.realized === 3 && r.json.totals.target === 0, 'totales del equipo (sin contar a Carolina): 4 agendadas, 3 realizadas');
 
+  { // el 31 de octubre a las 10 p. m. en Panamá el servidor (UTC) ya está en noviembre: el mes por defecto debe seguir siendo octubre
+    const RealDate = Date; class Fake extends RealDate { constructor(...a) { if (a.length) super(...a); else super('2026-11-01T03:00:00Z'); } static now() { return new RealDate('2026-11-01T03:00:00Z').getTime(); } }
+    global.Date = Fake; let d; try { d = await call('GET', '/api/quotas'); } finally { global.Date = RealDate; }
+    ok(d.status === 200 && d.json.month === '2026-10', 'mes por defecto de las metas: 10 p. m. del 31/10 en Panamá sigue siendo octubre');
+  }
   r = await call('GET', '/api/quotas?month=2026-13'); ok(r.status === 400, 'mes inválido → 400');
   r = await call('GET', '/api/quotas?month=octubre'); ok(r.status === 400, 'mes con formato libre → 400');
 

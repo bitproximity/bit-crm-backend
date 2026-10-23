@@ -8,6 +8,7 @@ const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
 const { logAudit } = require('../utils/audit');
 const { isExcludedFromBitProspect } = require('../utils/bitProspectTeam');
+const { todayInTz } = require('../utils/businessDate');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -215,7 +216,7 @@ router.patch('/clients/:id/mark-all-realizada', async (req, res) => {
 
   await supabase
     .from('b2b_records')
-    .update({ realized_date: new Date().toISOString().slice(0, 10) })
+    .update({ realized_date: todayInTz() })
     .eq('client_company_id', req.params.id)
     .is('realized_date', null);
 
@@ -249,7 +250,7 @@ router.post('/import', async (req, res) => {
   const BATCH = 500;
 
   if (mode === 'reuniones') {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayInTz();
     const statusFor = (r) => (r.realized_date ? 'reunion_realizada' : (r.meeting_date && r.meeting_date < today ? 'reunion_realizada' : 'reunion_agendada'));
 
     const existingMap = new Map();

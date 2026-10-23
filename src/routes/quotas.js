@@ -4,6 +4,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
 const { isExcludedFromBitProspect } = require('../utils/bitProspectTeam');
 const { fetchAll } = require('../utils/fetchAll');
+const { monthInTz } = require('../utils/businessDate');
 const { computeProgress, previousMonth } = require('../utils/quotaProgress');
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -25,7 +26,7 @@ function monthBounds(month) {
 const RECORD_COLS = 'id, executive, created_by, meeting_date, realized_date, companies(name)';
 
 router.get('/', async (req, res) => {
-  const month = req.query.month || new Date().toISOString().slice(0, 7);
+  const month = req.query.month || monthInTz();
   if (!MONTH_RE.test(month)) return res.status(400).json({ error: 'Mes inválido: usa el formato AAAA-MM.' });
   const { start, end } = monthBounds(month);
 

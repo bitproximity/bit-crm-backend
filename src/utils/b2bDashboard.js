@@ -1,3 +1,5 @@
+const { monthInTz } = require('./businessDate');
+
 function normalizeCountry(c) {
   return (c || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
@@ -136,7 +138,7 @@ function computeB2bDashboard(records, teamMembers = []) {
     byMonthRealized[month] = (byMonthRealized[month] || 0) + 1;
   });
 
-  const thisMonthKey = new Date().toISOString().slice(0, 7);
+  const thisMonthKey = monthInTz();
   // by_month se mantiene por compatibilidad — usa la fecha programada, como antes.
   const byMonth = byMonthScheduled;
 

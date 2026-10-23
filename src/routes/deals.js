@@ -1,6 +1,7 @@
 const express = require('express');
 const { loadCompanyMap, normalizeCompanyName, cleanName } = require('../utils/mergeRecords');
 const supabase = require('../config/supabase');
+const { todayInTz } = require('../utils/businessDate');
 const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
@@ -377,7 +378,7 @@ async function instantiateProjectFromTemplate({ templateId, dealId, companyId, o
       company_id: companyId,
       deal_id: dealId,
       owner_id: ownerId,
-      start_date: new Date().toISOString().slice(0, 10),
+      start_date: todayInTz(),
     })
     .select()
     .single();

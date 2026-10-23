@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
+const { dateInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { knownExternalIds } = require('../utils/knownExternalIds');
@@ -73,8 +74,8 @@ async function syncStripe(actorId) {
       total: Math.round(inv.total / 100 * 100) / 100,
       paid_amount: Math.round(inv.amount_paid / 100 * 100) / 100,
       status: stripeStatus(inv),
-      issue_date: new Date(inv.created * 1000).toISOString().slice(0, 10),
-      due_date: inv.due_date ? new Date(inv.due_date * 1000).toISOString().slice(0, 10) : new Date(inv.created * 1000).toISOString().slice(0, 10),
+      issue_date: dateInTz(new Date(inv.created * 1000)),
+      due_date: inv.due_date ? dateInTz(new Date(inv.due_date * 1000)) : dateInTz(new Date(inv.created * 1000)),
       notes: `Importado de Stripe (${accountName}) - ${name} (${email})`,
       client_name: name === 'Sin nombre' ? null : name,
       source_account: accountName,

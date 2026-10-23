@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
+const { todayInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
@@ -12,7 +13,7 @@ router.use(requireAuth);
 router.use(requirePage('facturacion'));
 
 function withOverdueFlag(inv) {
-  const overdue = inv.status !== 'pagada' && inv.status !== 'cancelada' && inv.due_date && inv.due_date < new Date().toISOString().slice(0, 10);
+  const overdue = inv.status !== 'pagada' && inv.status !== 'cancelada' && inv.due_date && inv.due_date < todayInTz();
   return { ...inv, overdue };
 }
 
@@ -75,7 +76,7 @@ router.get('/summary', async (req, res) => {
   const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
   const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInTz();
   const summary = { total_facturado: 0, total_cobrado: 0, total_pendiente: 0, total_vencido: 0, count: data.length };
 
   // Por empresa/cuenta que facturó (BitProximity LLC, BIT Colombia SAS, Diana Sanchez, etc.)
