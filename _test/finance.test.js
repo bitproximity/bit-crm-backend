@@ -196,6 +196,11 @@ const srv = app.listen(0, async () => {
   fake.db.deals.push({ id: 'o1', title: 'Abierto viejo', value: 6000, currency: 'USD', status: 'abierto', owner_id: 'u-ana', created_at: '2026-01-01T00:00:00Z', companies: { name: 'Acme' }, pipelines: { name: 'Bit WiFi' }, pipeline_stages: { name: 'Demo' }, team_members: { full_name: 'Ana' } },
     { id: 'o2', title: 'Abierto sin dueño', value: 1200, currency: 'USD', status: 'abierto', owner_id: null, created_at: '2026-01-02T00:00:00Z', companies: { name: 'Beta' }, pipelines: { name: 'Bit WiFi' }, pipeline_stages: { name: 'Demo' }, team_members: null },
     { id: 'o3', title: 'Abierto reciente', value: 100, currency: 'USD', status: 'abierto', owner_id: 'u-ana', created_at: new Date().toISOString(), companies: { name: 'Gamma' }, pipelines: { name: 'Bit WiFi' }, pipeline_stages: { name: 'Demo' }, team_members: { full_name: 'Ana' } });
+  for (const rol of ['wifi_partner', 'outbound']) {
+    r = await call('GET', '/api/stale-deals?days=14', null, rol); const r2 = await call('POST', '/api/stale-deals/remind', { deal_ids: ['o1'] }, rol);
+    ok(r.status === 403 && r2.status === 403, `el rol «${rol}» no puede ver ni reactivar los tratos estáticos de todos los embudos`);
+  }
+  r = await call('GET', '/api/stale-deals?days=14', null, 'operaciones'); ok(r.status === 200, 'operaciones sí puede');
   r = await call('GET', '/api/stale-deals?days=14');
   ok(r.status === 200 && r.json.deals.map((d) => d.id).join() === 'o1,o2,d7' && r.json.summary.value_usd === 7300 && r.json.days === 14, 'GET /api/stale-deals lista los estáticos por USD y solo los abiertos (los ganados no entran)');
   r = await call('GET', '/api/stale-deals?days=9999'); ok(r.json.days === 365, 'el umbral se limita a 1–365 días');

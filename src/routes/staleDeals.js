@@ -2,14 +2,17 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { memo } = require('../utils/memo');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const { createNotification } = require('../utils/notify');
 const { logAudit } = require('../utils/audit');
 const { todayInTz } = require('../utils/businessDate');
 const { computeStale, REMINDER_PREFIX } = require('../utils/staleDeals');
 
 const router = express.Router();
+// Ven y reactivan TODOS los tratos abiertos: administración y operaciones. El socio externo (solo ve su embudo) y
+// prospección (sin acceso a tratos) quedan fuera, igual que en el resto de la sección de tratos.
 router.use(requireAuth);
+router.use(requireRole('admin', 'operaciones'));
 
 const clampDays = (v) => Math.min(365, Math.max(1, Math.round(Number(v)) || 14));
 
