@@ -8,22 +8,27 @@ const LABEL = process.argv[3] || 'x';
 const EXISTING = 600, NEW = 5, PER_VIEJA_MS = 60; // ms por viaje en producción (solo para proyectar)
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) process.exitCode = 1; };
 
-const stats = { trips: 0, selects: 0, inserts: 0, bulkReads: 0 };
+const stats = { trips: 0, selects: 0, inserts: 0, updates: 0, bulkReads: 0 };
 const DB = { invoices: [], audit_log: [] };
 for (const [src, prefix] of [['stripe', 'in_'], ['alegra:1', ''], ['alegra:2', ''], ['facturero_movil:1', '']]) {
-  for (let i = 0; i < EXISTING; i++) DB.invoices.push({ id: `${src}-${i}`, external_source: src, external_id: `${prefix}${i}` });
+  // Filas como las deja el sincronizador (iguales a lo que trae el origen): así «sin cambios» es de verdad sin cambios.
+  const stored = src === 'stripe' ? { status: 'pendiente', paid_amount: 0, total: 11, due_date: '2026-10-30', currency: 'USD' }
+    : /^alegra:/.test(src) ? { status: 'pendiente', paid_amount: 0, total: 11, due_date: '2026-10-30', currency: 'COP' } : {};
+  for (let i = 0; i < EXISTING; i++) DB.invoices.push({ id: `${src}-${i}`, external_source: src, external_id: `${prefix}${i}`, ...stored });
 }
 class Q {
   constructor(t) { this.t = t; this.f = []; this.op = 'select'; this.cols = ''; this.one = null; this.rg = null; this.payload = null; }
   select(c) { if (this.op === 'insert') this.ret = true; this.cols = c || '*'; return this; }
   insert(p) { this.op = 'insert'; this.payload = p; return this; }
+  update(p) { this.op = 'update'; this.payload = p; return this; }
   eq(c, v) { this.f.push((r) => r[c] === v); return this; }
   order() { return this; } range(a, b) { this.rg = [a, b]; return this; }
   single() { this.one = 'single'; return this; } maybeSingle() { this.one = 'maybe'; return this; }
   then(res) {
     stats.trips++;
     let out;
-    if (this.op === 'insert') { if (this.t === 'invoices') stats.inserts++; const row = { id: `new-${stats.trips}`, ...this.payload }; (DB[this.t] = DB[this.t] || []).push(row); out = { data: row, error: null }; }
+    if (this.op === 'update') { if (this.t === 'invoices') stats.updates++; (DB[this.t] || []).filter((r) => this.f.every((fn) => fn(r))).forEach((r) => Object.assign(r, this.payload)); out = { data: null, error: null }; }
+    else if (this.op === 'insert') { if (this.t === 'invoices') stats.inserts++; const row = { id: `new-${stats.trips}`, ...this.payload }; (DB[this.t] = DB[this.t] || []).push(row); out = { data: row, error: null }; }
     else {
       let rows = (DB[this.t] || []).filter((r) => this.f.every((fn) => fn(r)));
       if (this.rg) { stats.bulkReads++; rows = rows.slice(this.rg[0], this.rg[1] + 1); } else stats.selects++;
@@ -69,6 +74,7 @@ Object.assign(process.env, { SUPABASE_URL: 'http://x', SUPABASE_SERVICE_ROLE_KEY
     ok(out.Stripe.nuevas === NEW && out.Stripe.ya_existian === EXISTING, `Stripe: ${NEW} nuevas y ${EXISTING} ya existían`);
     ok(out['Alegra (2 cuentas)'].nuevas === NEW * 2 && out['Alegra (2 cuentas)'].ya_existian === EXISTING * 2, `Alegra: ${NEW * 2} nuevas y ${EXISTING * 2} ya existían (2 cuentas)`);
     ok(out['Facturero Móvil'].nuevas === NEW && out['Facturero Móvil'].ya_existian === EXISTING, `Facturero Móvil: ${NEW} nuevas y ${EXISTING} ya existían`);
+    ok(stats.updates === 0, 'ninguna factura sin cambios genera una escritura (solo se escribe lo que cambió en el origen)');
     ok(DB.invoices.length === 4 * EXISTING + 4 * NEW, `la tabla quedó con ${DB.invoices.length} facturas (2.400 existentes + 20 nuevas)`);
     const keys = DB.invoices.map((r) => r.external_source + '|' + r.external_id); ok(new Set(keys).size === keys.length, 'ninguna factura repetida (fuente + id)');
     const alegraRows = DB.invoices.filter((r) => /^alegra:/.test(r.external_source) && r.invoice_number);

@@ -5,6 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { todayInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
+const { buildConverter, round2 } = require('../utils/currency');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -12,9 +13,21 @@ router.use(requireAuth);
 // además respeta team_members.blocked_pages (un admin puede tener Facturación bloqueada).
 router.use(requirePage('facturacion'));
 
+const dayNum = (str) => { const [y, m, d] = String(str).slice(0, 10).split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+
 function withOverdueFlag(inv) {
-  const overdue = inv.status !== 'pagada' && inv.status !== 'cancelada' && inv.due_date && inv.due_date < todayInTz();
-  return { ...inv, overdue };
+  const today = todayInTz();
+  const overdue = !!(inv.status !== 'pagada' && inv.status !== 'cancelada' && inv.due_date && inv.due_date < today);
+  return { ...inv, overdue, days_late: overdue ? Math.round(dayNum(today) - dayNum(inv.due_date)) : 0 };
+}
+
+// Cada factura sale también en USD (a la tasa del día): total, cobrado y por cobrar. La moneda original sigue
+// viniendo en `currency`; si una moneda no tiene tasa, `rate_missing` lo dice en vez de sumarla 1 a 1 con dólares.
+function withUsd(inv, conv) {
+  const total = round2(conv.toUsd(inv.total, inv.currency));
+  const paid = round2(conv.toUsd(inv.paid_amount, inv.currency));
+  const open = inv.status !== 'pagada' && inv.status !== 'cancelada';
+  return { ...inv, total_usd: total, paid_usd: paid, pending_usd: open ? Math.max(round2(total - paid), 0) : 0, rate_missing: !conv.hasRate(inv.currency) };
 }
 
 // GET /api/invoices?deal_id=&company_id=&status=
@@ -47,9 +60,10 @@ router.get('/', async (req, res) => {
   const start = Number(offset) || 0;
   query = query.range(start, start + 999);
 
-  const { data, error } = await query;
+  const [{ data, error }, { data: rates }] = await Promise.all([query, supabase.from('exchange_rates').select('*')]);
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data.map(withOverdueFlag));
+  const conv = buildConverter(rates);
+  res.json(data.map((inv) => withUsd(withOverdueFlag(inv), conv)));
 });
 
 // GET /api/invoices/summary — totales para las tarjetas de resumen
@@ -73,11 +87,11 @@ router.get('/summary', async (req, res) => {
 
   // Todo se convierte a USD antes de sumar — antes se sumaban montos de monedas distintas
   // (USD + COP) directo, lo que daba un total sin sentido real.
-  const rateMap = Object.fromEntries((rates || []).map((r) => [r.currency, Number(r.rate_to_usd)]));
-  const toUsd = (value, currency) => Number(value || 0) * (rateMap[currency] ?? 1);
+  const conv = buildConverter(rates);
+  const toUsd = conv.toUsd;
 
   const today = todayInTz();
-  const summary = { total_facturado: 0, total_cobrado: 0, total_pendiente: 0, total_vencido: 0, count: data.length };
+  const summary = { total_facturado: 0, total_cobrado: 0, total_pendiente: 0, total_vencido: 0, count: 0, count_overdue: 0 };
 
   // Por empresa/cuenta que facturó (BitProximity LLC, BIT Colombia SAS, Diana Sanchez, etc.)
   const byAccount = {};
@@ -87,6 +101,9 @@ router.get('/summary', async (req, res) => {
   const aging = { al_dia: 0, '1_30': 0, '31_60': 0, '61_90': 0, mas_90: 0 };
 
   data.forEach((inv) => {
+    // Una factura anulada que nunca tuvo cobros no es dinero facturado.
+    if (inv.status === 'cancelada' && Number(inv.paid_amount || 0) === 0) return;
+    summary.count += 1;
     const totalUsd = toUsd(inv.total, inv.currency);
     const paidUsd = toUsd(inv.paid_amount, inv.currency);
     const pendingUsd = totalUsd - paidUsd;
@@ -112,6 +129,7 @@ router.get('/summary', async (req, res) => {
       byAccount[accountKey].pendiente += pendingUsd;
       if (inv.due_date && inv.due_date < today) {
         summary.total_vencido += pendingUsd;
+        summary.count_overdue += 1;
         const daysLate = Math.floor((new Date(today) - new Date(inv.due_date)) / 86400000);
         if (daysLate <= 30) aging['1_30'] += pendingUsd;
         else if (daysLate <= 60) aging['31_60'] += pendingUsd;
@@ -137,6 +155,9 @@ router.get('/summary', async (req, res) => {
     .slice(-12);
 
   summary.aging = aging;
+  summary.collection_rate_pct = summary.total_facturado > 0 ? Math.round((summary.total_cobrado / summary.total_facturado) * 100) : null;
+  summary.missing_rates = [...conv.missing];   // monedas con facturas pero sin tasa de cambio (no se suman)
+  summary.rates_updated_at = conv.updatedAt;
 
   res.json(summary);
 });

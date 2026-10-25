@@ -11,4 +11,11 @@ async function knownExternalIds(source) {
   return new Set((data || []).map((r) => String(r.external_id)));
 }
 
-module.exports = { knownExternalIds };
+// Igual que arriba pero con lo necesario para decidir si una factura ya sincronizada cambió en el origen.
+async function knownExternalInvoices(source) {
+  const { data, error } = await fetchAll(supabase.from('invoices').select('id, external_id, status, paid_amount, total, due_date, currency, invoice_number').eq('external_source', source));
+  if (error) throw new Error(`No se pudieron leer las facturas ya sincronizadas de "${source}": ${error.message}`);
+  return new Map((data || []).map((r) => [String(r.external_id), r]));
+}
+
+module.exports = { knownExternalIds, knownExternalInvoices };

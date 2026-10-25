@@ -4,7 +4,7 @@ const { spawnSync } = require('child_process'); const path = require('path');
 const root = path.resolve(__dirname, '..');
 const suites = [
   ['backend.test.js'], ['product.test.js'], ['companies.test.js'], ['meeting.test.js'], ['timing.test.js'], ['dealsfilter.test.js'],
-  ['invoiceParser.test.js'], ['invoiceImport.test.js'], ['quotas.test.js'], ['businessDate.test.js'], ['perf.js', root, 'ci', 'check'], ['sync.js', root, 'ci', 'check'],
+  ['invoiceParser.test.js'], ['invoiceImport.test.js'], ['quotas.test.js'], ['businessDate.test.js'], ['finance.test.js'], ['invoiceSync.test.js'], ['perf.js', root, 'ci', 'check'], ['sync.js', root, 'ci', 'check'],
 ].filter(([f]) => require('fs').existsSync(path.join(__dirname, f)));
 let pass = 0; let fail = 0; const malas = [];
 for (const [f, ...args] of suites) {
