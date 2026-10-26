@@ -129,6 +129,16 @@ const { computeFinance } = require('../src/utils/financeMetrics');
   ok(vacio.leaders.country === null && vacio.data_gaps.country_unassigned_usd === 100, 'si todo está sin país, no hay líder (null) y la brecha es todo');
 }
 
+// ganados SIN fecha de cierre: no se pueden contar en «ganado del mes/año», se informan aparte
+{
+  const base = { currency: 'USD', status: 'ganado', created_at: '2026-08-10T15:00:00Z', product_line: 'Bit WiFi', pipelines: { name: 'Bit WiFi' }, companies: { country: 'Ecuador' } };
+  const f2 = computeFinance({ invoices: [], payments: [], rates: RATES, today: '2026-10-23', deals: [
+    { ...base, id: 'k1', title: 'k1', value: 1000, closed_at: '2026-10-05T15:00:00Z' }, { ...base, id: 'k2', title: 'k2', value: 700, closed_at: null }, { ...base, id: 'k3', title: 'k3', value: 300, closed_at: null },
+  ] });
+  ok(f2.sales.won_ytd_usd === 1000 && f2.sales.won_count_ytd === 1, 'un ganado sin fecha de cierre no entra en el ganado del año (no se sabe cuándo se ganó)');
+  ok(f2.data_gaps.won_without_close_date === 2 && f2.data_gaps.won_without_close_date_usd === 1000, '…pero se informa cuántos son y cuánto suman (2 tratos, USD 1.000) para poder corregirlos');
+}
+
 // ── 5) tratos estáticos (parte pura) ─────────────────────────────────────────────────────────────
 const { computeStale } = require('../src/utils/staleDeals');
 {
@@ -247,13 +257,38 @@ const srv = app.listen(0, async () => {
   r = await call('GET', '/api/stale-deals?days=14');
   ok(r.json.deals.filter((d) => ['o1', 'o2'].includes(d.id)).every((d) => d.has_reminder) && !r.json.deals.find((d) => d.id === 'd7').has_reminder && r.json.summary.with_reminder === 2, 'la lista marca los que ya tienen recordatorio');
 
+  // depuración en bloque: asignar responsable y cerrar como perdidos
+  Object.assign(fake.db, { team_members: [{ id: 'u-ana', full_name: 'Ana Espinel', active: true }, { id: 'u-off', full_name: 'Persona Inactiva', active: false }] });
+  const dealRow = (id) => fake.db.deals.find((d) => d.id === id);
+  r = await call('POST', '/api/stale-deals/assign', { deal_ids: ['o2', 'd1', 'o3'], owner_id: 'u-ana' }, 'wifi_partner'); ok(r.status === 403, 'el socio externo no puede asignar tratos');
+  r = await call('POST', '/api/stale-deals/assign', { deal_ids: [], owner_id: 'u-ana' }); ok(r.status === 400, 'asignar sin tratos → 400');
+  r = await call('POST', '/api/stale-deals/assign', { deal_ids: ['o2'] }); ok(r.status === 400, 'asignar sin responsable → 400');
+  r = await call('POST', '/api/stale-deals/assign', { deal_ids: ['o2'], owner_id: 'nadie' }); ok(r.status === 400, 'un responsable que no existe → 400');
+  r = await call('POST', '/api/stale-deals/assign', { deal_ids: ['o2'], owner_id: 'u-off' }); ok(r.status === 400 && dealRow('o2').owner_id === null, 'un responsable inactivo → 400 y no se asigna');
+  fake.db.notifications.length = 0;
+  r = await call('POST', '/api/stale-deals/assign', { deal_ids: ['o2', 'd1', 'o3'], owner_id: 'u-ana' });
+  ok(r.status === 200 && r.json.updated === 2 && r.json.skipped === 1 && r.json.owner === 'Ana Espinel', 'asigna a Ana los 2 tratos abiertos y salta el que no lo está');
+  ok(dealRow('o2').owner_id === 'u-ana' && dealRow('o3').owner_id === 'u-ana' && dealRow('d1').owner_id === 'u-admin', 'el trato ganado no se toca');
+  ok(fake.db.notifications.filter((n) => n.recipient_id === 'u-ana' && /Te asignaron 2 tratos/.test(n.title)).length === 1, 'un solo aviso a la persona, con el total');
+
+  r = await call('POST', '/api/stale-deals/close-lost', { deal_ids: ['o1', 'd1'], reason: 'Precio muy alto' }, 'operaciones'); ok(r.status === 403 && dealRow('o1').status === 'abierto', 'cerrar tratos como perdidos en bloque es solo para administración');
+  fake.db.notifications.length = 0; const auditoriaAntes = fake.db.audit_log.length;
+  r = await call('POST', '/api/stale-deals/close-lost', { deal_ids: ['o1', 'd1'], reason: 'Precio muy alto' });
+  ok(r.status === 200 && r.json.closed === 1 && r.json.skipped === 1 && r.json.reason === 'Precio muy alto', 'cierra el trato abierto y salta el ganado');
+  ok(dealRow('o1').status === 'perdido' && dealRow('o1').lost_reason === 'Precio muy alto' && dealRow('o1').closed_at && dealRow('d1').status === 'ganado', 'queda perdido con su motivo y fecha; el ganado sigue ganado');
+  ok(fake.db.audit_log.length === auditoriaAntes + 1 && fake.db.notifications.some((n) => n.recipient_id === 'u-ana' && /1 de tus tratos se cerraron como perdidos/.test(n.title)), 'queda en la auditoría y el responsable recibe un aviso');
+  r = await call('POST', '/api/stale-deals/close-lost', { deal_ids: ['o3'], reason: '   ' }); ok(r.json.closed === 1 && dealRow('o3').lost_reason === 'Dejó de responder', 'sin motivo usa «Dejó de responder»');
+  r = await call('POST', '/api/stale-deals/close-lost', { deal_ids: [] }); ok(r.status === 400, 'cerrar sin tratos → 400');
+  require('../src/utils/memo').clearAll();
+  r = await call('GET', '/api/stale-deals?days=14'); ok(!r.json.deals.some((d) => ['o1', 'o3'].includes(d.id)), 'los cerrados ya no aparecen como estáticos');
+
   // aviso diario
   const { notifyStaleOwners } = require('../src/utils/staleRemindersScheduler');
   fake.db.notifications.length = 0;
   await notifyStaleOwners();
   const avisos = fake.db.notifications.filter((n) => n.type === 'stale_deals');
   const ana = avisos.find((n) => n.recipient_id === 'u-ana');
-  ok(avisos.length === 2 && ana.title.includes('1 trato') && ana.title.includes('6,000') && ana.link === '/stale-deals', 'aviso diario: un mensaje por responsable con cuántos tratos y cuánto dinero (el trato sin responsable no avisa a nadie)');
+  ok(avisos.length === 2 && ana.title.includes('1 trato') && ana.title.includes('1,200') && ana.link === '/stale-deals', 'aviso diario: un mensaje por responsable con cuántos tratos y cuánto dinero (el trato sin responsable no avisa a nadie)');
   await notifyStaleOwners();
   ok(fake.db.notifications.filter((n) => n.type === 'stale_deals').length === 2, 'no se repite el mismo día (un deploy no vuelve a avisar)');
 

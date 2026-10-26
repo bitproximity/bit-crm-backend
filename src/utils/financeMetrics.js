@@ -88,7 +88,10 @@ function computeFinance({ invoices = [], payments = [], deals = [], rates = [], 
   }, new Map()).entries()].map(([name, d]) => ({ name, avg_days: Math.round(avg(d)), invoices: d.length })).sort((a, b) => b.avg_days - a.avg_days);
 
   // ── Ventas (tratos ganados) ──
-  const won = deals.filter((d) => d.status === 'ganado' && d.closed_at).map((d) => ({ ...d, closed_day: dateInTz(d.closed_at) }));
+  const wonAll = deals.filter((d) => d.status === 'ganado');
+  // Un trato ganado SIN fecha de cierre no puede contarse en «ganado del mes/año» (no se sabe cuándo se ganó): se informa aparte.
+  const wonNoDate = wonAll.filter((d) => !d.closed_at);
+  const won = wonAll.filter((d) => d.closed_at).map((d) => ({ ...d, closed_day: dateInTz(d.closed_at) }));
   const wonYear = won.filter((d) => d.closed_day.startsWith(year));
   const wonMonth = wonYear.filter((d) => d.closed_day.startsWith(month));
   const sumUsd = (arr) => arr.reduce((n, d) => n + conv.toUsd(d.value, d.currency), 0);
@@ -126,7 +129,10 @@ function computeFinance({ invoices = [], payments = [], deals = [], rates = [], 
     top_debtors: [...debtors.values()].map((d) => ({ ...d, overdue_usd: round2(d.overdue_usd) })).sort((a, b) => b.overdue_usd - a.overdue_usd).slice(0, 5),
     slowest_payers: slowest(paidDays.map(({ i, days }) => ({ key: clientOf(i), days })), 2, 5).map((s) => ({ client: s.name, avg_days_to_pay: s.avg_days, invoices: s.deals })),
     leaders: { product: topReal(byProduct), country: topReal(byCountry), pipeline: top(byPipeline) },
-    data_gaps: { country_unassigned_usd: gap(byCountry), product_unassigned_usd: gap(byProduct) },
+    data_gaps: {
+      country_unassigned_usd: gap(byCountry), product_unassigned_usd: gap(byProduct),
+      won_without_close_date: wonNoDate.length, won_without_close_date_usd: round2(sumUsd(wonNoDate)),
+    },
     by_country: byCountry.slice(0, 8), by_product: byProduct.slice(0, 8), by_pipeline: byPipeline.slice(0, 8),
     closing_speed: {
       avg_days: closing.length ? Math.round(avg(closing.map((c) => c.days))) : null, sample: closing.length,
