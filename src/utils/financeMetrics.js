@@ -107,7 +107,11 @@ function computeFinance({ invoices = [], payments = [], deals = [], rates = [], 
   const closing = won.filter((d) => d.created_at && d.closed_day >= oneYearAgo)
     .map((d) => ({ d, days: Math.max(0, Math.round((new Date(d.closed_at) - new Date(d.created_at)) / 86400000)) }));
 
+  const UNASSIGNED = 'Sin especificar';
   const top = (arr) => (arr[0] ? { name: arr[0].name, won_usd: arr[0].won_usd } : null);
+  // «Sin especificar» no es un país ni un producto líder: es lo que falta clasificar. Se salta como líder y se informa aparte.
+  const topReal = (arr) => top(arr.filter((r) => r.name !== UNASSIGNED));
+  const gap = (arr) => round2((arr.find((r) => r.name === UNASSIGNED) || {}).won_usd || 0);
   return {
     year: Number(year), month, generated_at: new Date().toISOString(),
     sales: { won_month_usd: round2(sumUsd(wonMonth)), won_ytd_usd: round2(sumUsd(wonYear)), won_count_month: wonMonth.length, won_count_ytd: wonYear.length },
@@ -121,7 +125,8 @@ function computeFinance({ invoices = [], payments = [], deals = [], rates = [], 
     },
     top_debtors: [...debtors.values()].map((d) => ({ ...d, overdue_usd: round2(d.overdue_usd) })).sort((a, b) => b.overdue_usd - a.overdue_usd).slice(0, 5),
     slowest_payers: slowest(paidDays.map(({ i, days }) => ({ key: clientOf(i), days })), 2, 5).map((s) => ({ client: s.name, avg_days_to_pay: s.avg_days, invoices: s.deals })),
-    leaders: { product: top(byProduct), country: top(byCountry), pipeline: top(byPipeline) },
+    leaders: { product: topReal(byProduct), country: topReal(byCountry), pipeline: top(byPipeline) },
+    data_gaps: { country_unassigned_usd: gap(byCountry), product_unassigned_usd: gap(byProduct) },
     by_country: byCountry.slice(0, 8), by_product: byProduct.slice(0, 8), by_pipeline: byPipeline.slice(0, 8),
     closing_speed: {
       avg_days: closing.length ? Math.round(avg(closing.map((c) => c.days))) : null, sample: closing.length,

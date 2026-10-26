@@ -221,8 +221,16 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/invoices/:id — editar campos generales (no líneas ni pagos)
+// Cuando una factura se marca pagada (o cambia lo cobrado) desde la pantalla, ese cobro queda registrado como un PAGO con su
+// fecha. Antes solo cambiaba el monto, así que no había forma de saber CUÁNDO se cobró: los «cobros del mes» salían en cero y no
+// se podían calcular los días promedio de cobro. Si se vuelve a «pendiente», se retiran los pagos que se crearon así.
+const MARKED_PAID_METHOD = 'Marcada como pagada';
+
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
+  const touchesPaid = Object.prototype.hasOwnProperty.call(req.body || {}, 'paid_amount');
+  const before = touchesPaid ? (await supabase.from('invoices').select('id, paid_amount').eq('id', id).single()).data : null;
+
   const { data, error } = await supabase
     .from('invoices')
     .update({ ...req.body, updated_at: new Date().toISOString() })
@@ -231,6 +239,15 @@ router.patch('/:id', async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
+
+  if (before && data) {
+    const was = Number(before.paid_amount || 0); const now = Number(data.paid_amount || 0);
+    if (now > was + 0.005) {
+      await supabase.from('invoice_payments').insert({ invoice_id: id, amount: round2(now - was), method: MARKED_PAID_METHOD, notes: 'Cobro registrado al marcar la factura como pagada', paid_at: new Date().toISOString(), recorded_by: req.teamMember.id });
+    } else if (now < was - 0.005) {
+      await supabase.from('invoice_payments').delete().eq('invoice_id', id).eq('method', MARKED_PAID_METHOD);
+    }
+  }
   await logAudit('invoice', id, 'updated', req.teamMember.id, { fields: Object.keys(req.body) });
   res.json(data);
 });

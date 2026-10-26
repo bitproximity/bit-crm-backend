@@ -8,6 +8,7 @@ const fake = createFakeDb({
     { id: 'e2', external_source: 'alegra:1', external_id: '2', invoice_number: 'BIT2', status: 'pagada', paid_amount: 500, total: 500, due_date: '2026-09-01', currency: 'COP' }, // marcada «pagada» a mano en el CRM
     { id: 'e4', external_source: 'alegra:1', external_id: '4', invoice_number: 'BIT4', status: 'cancelada', paid_amount: 700, total: 700, due_date: '2026-08-01', currency: 'COP' }, // «cerrada» que antes se guardaba como cancelada
     { id: 'e5', external_source: 'alegra:1', external_id: '5', invoice_number: 'BIT5', status: 'pendiente', paid_amount: 0, total: 800, due_date: '2026-08-15', currency: 'COP' },
+    { id: 'e6', external_source: 'alegra:1', external_id: '6', invoice_number: 'BIT6', status: 'parcial', paid_amount: 100, total: 300, due_date: '2026-08-20', currency: 'COP' }, // anulada en Alegra pero con un cobro registrado en el CRM
     { id: 's1', external_source: 'stripe', external_id: 'in_1', invoice_number: 'ST-1', status: 'pendiente', paid_amount: 0, total: 84, due_date: '2026-10-29', currency: 'USD' },
   ],
   invoice_payments: [], team_members: [], deals: [], companies: [], exchange_rates: [],
@@ -26,6 +27,7 @@ const ALEGRA = [
   alg(3, { total: 300, totalPaid: 300, status: 'closed', dueDate: '2026-10-25', date: '2026-10-20', currency: { code: 'USD' } }),
   alg(4, { total: 700, totalPaid: 700, status: 'closed', dueDate: '2026-08-01' }),
   alg(5, { total: 800, totalPaid: 0, status: 'void', dueDate: '2026-08-15' }),
+  alg(6, { total: 300, totalPaid: 0, status: 'void', dueDate: '2026-08-20' }),
 ];
 const STRIPE = [{ id: 'in_1', number: 'ST-1', status: 'paid', customer_name: 'Ensaladas', customer_email: 'x@y.z', currency: 'usd', subtotal: 8400, total: 8400, amount_paid: 8400, created: 1792000000, due_date: 1793000000 }];
 global.fetch = async (url) => {
@@ -48,12 +50,13 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
 
   // ── primera corrida de Alegra ──
   let r = await sync.syncAlegra('u-admin');
-  ok(!r.error && r.created === 1 && r.updated === 3 && r.skipped === 1 && r.total_en_alegra === 5, 'Alegra: 1 factura nueva, 3 actualizadas, 1 sin cambios (de 5)');
+  ok(!r.error && r.created === 1 && r.updated === 3 && r.skipped === 2 && r.total_en_alegra === 6, 'Alegra: 1 factura nueva, 3 actualizadas, 2 sin cambios (de 6)');
   ok(row('e1').paid_amount === 400 && row('e1').status === 'parcial' && row('e1').due_date === '2026-10-09', 'BIT1: el cobro de 400 y el nuevo vencimiento llegaron al CRM');
   const pagos = fake.db.invoice_payments;
   ok(pagos.length === 1 && pagos[0].invoice_id === 'e1' && pagos[0].amount === 400 && /Alegra/.test(pagos[0].method) && pagos[0].paid_at, 'el cobro queda como pago en el historial de la factura (para los días de cobro)');
   ok(row('e2').status === 'pagada' && row('e2').paid_amount === 500, 'BIT2: marcada «pagada» a mano en el CRM, abierta en Alegra → NO se pisa');
-  ok(r.discrepancies.length === 1 && r.discrepancies[0].invoice_number === 'BIT2' && r.discrepancies[0].kind === 'pagada_en_crm_abierta_en_origen', '…y se informa como diferencia para que alguien decida');
+  ok(!r.discrepancies.some((d) => d.invoice_number === 'BIT2'), '…y NO se informa como diferencia: los cobros se registran a mano en el CRM, es lo normal');
+  ok(r.discrepancies.length === 1 && r.discrepancies[0].invoice_number === 'BIT6' && r.discrepancies[0].kind === 'anulada_en_origen_con_cobros_en_crm' && row('e6').status === 'parcial', 'BIT6: anulada en Alegra pero con cobros en el CRM → única diferencia que sí se informa (y no se cancela)');
   ok(row('e4').status === 'pagada', 'BIT4: «cerrada» y cobrada que estaba como cancelada pasa a pagada');
   ok(row('e5').status === 'cancelada', 'BIT5: anulada en Alegra y sin cobros → cancelada');
   const nueva = fake.db.invoices.find((i) => i.external_id === '3' && i.external_source === 'alegra:1');
@@ -62,8 +65,8 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
 
   // ── repetir no cambia nada ──
   r = await sync.syncAlegra('u-admin');
-  ok(r.created === 0 && r.updated === 0 && r.skipped === 5 && fake.db.invoice_payments.length === 1 && fake.db.invoices.length === 6, 'repetir la corrida no crea ni cambia nada (ni duplica pagos)');
-  ok(r.discrepancies.length === 1, 'la diferencia de BIT2 se sigue informando mientras exista');
+  ok(r.created === 0 && r.updated === 0 && r.skipped === 6 && fake.db.invoice_payments.length === 1 && fake.db.invoices.length === 7, 'repetir la corrida no crea ni cambia nada (ni duplica pagos)');
+  ok(r.discrepancies.length === 1, 'la diferencia de BIT6 se sigue informando mientras exista');
 
   // ── Stripe ──
   r = await sync.syncStripe('u-admin');
@@ -75,7 +78,7 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
   syncStatus.reset();
   await runAll();
   const st = syncStatus.get();
-  ok(st.sources.Alegra && st.sources.Alegra.ok && st.sources.Alegra.skipped === 5 && st.sources.Alegra.discrepancies.length === 1, 'el programador registra el estado de Alegra con sus diferencias');
+  ok(st.sources.Alegra && st.sources.Alegra.ok && st.sources.Alegra.skipped === 6 && st.sources.Alegra.discrepancies.length === 1, 'el programador registra el estado de Alegra con sus diferencias');
   ok(st.sources.Stripe && st.sources.Stripe.ok && st.last_run_at, 'y el de Stripe, con la hora de la última corrida');
 
   // ── ruta de estado ──
@@ -85,7 +88,7 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
     http.get({ port: srv.address().port, path: '/api/invoice-sync/status' }, (res) => {
       let s = ''; res.on('data', (c) => (s += c)); res.on('end', () => {
         const j = JSON.parse(s);
-        ok(res.statusCode === 200 && j.sources.Alegra.discrepancies[0].invoice_number === 'BIT2' && j.last_run_at, 'GET /api/invoice-sync/status devuelve cuándo corrió y las diferencias');
+        ok(res.statusCode === 200 && j.sources.Alegra.discrepancies[0].invoice_number === 'BIT6' && j.last_run_at, 'GET /api/invoice-sync/status devuelve cuándo corrió y las diferencias');
         srv.close(); restore();
       });
     });

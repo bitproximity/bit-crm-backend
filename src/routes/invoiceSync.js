@@ -38,8 +38,14 @@ async function insertInvoiceTolerant(payload) {
 // Alinea una factura que YA existe en el CRM con lo que trae el origen (ver utils/invoiceMerge.js para la regla).
 // Devuelve { updated, discrepancy }. Un cobro nuevo en el origen también queda como pago en el historial de la
 // factura, para que «días de cobro» y los cobros del mes salgan bien.
+// Los cobros se registran A MANO en el CRM (así trabaja el negocio): que una factura esté «pagada» aquí y abierta en Alegra/Stripe, o
+// que el CRM tenga más cobrado que el origen, es lo NORMAL y no se informa (eran 107 avisos de ruido). Solo se informa lo que sí pide
+// una decisión: una factura anulada en el origen que en el CRM tiene cobros.
+const ACTIONABLE_DISCREPANCIES = new Set(['anulada_en_origen_con_cobros_en_crm']);
+
 async function alignExisting(row, incoming, actorId, label) {
-  const { patch, paymentDelta, discrepancy } = mergeIncoming(row, incoming);
+  const { patch, paymentDelta, discrepancy: rawDiscrepancy } = mergeIncoming(row, incoming);
+  const discrepancy = rawDiscrepancy && ACTIONABLE_DISCREPANCIES.has(rawDiscrepancy.kind) ? rawDiscrepancy : null;
   const extra = discrepancy ? { invoice_number: row.invoice_number, external_id: row.external_id, source: label, ...discrepancy } : null;
   if (Object.keys(patch).length === 0) return { updated: false, discrepancy: extra };
   const { error } = await supabase.from('invoices').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', row.id);

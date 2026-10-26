@@ -116,6 +116,19 @@ const { computeFinance } = require('../src/utils/financeMetrics');
   ok(f.rates.missing.join() === 'PYG' && f.reconciliation.coverage_pct === 40, 'avisa que falta la tasa de PYG y trae la cobertura de la conciliación');
 }
 
+// líderes: «Sin especificar» no es un país ni un producto líder, es una brecha de datos
+{
+  const wd = (id, value, pipeline, country, product) => ({ id, title: id, value, currency: 'USD', status: 'ganado', closed_at: '2026-09-10T15:00:00Z', created_at: '2026-08-10T15:00:00Z', product_line: product, pipelines: { name: pipeline }, companies: { country } });
+  const g = computeFinance({ invoices: [], payments: [], rates: RATES, today: '2026-10-23', deals: [
+    wd('a', 9000, 'Bit WiFi', null, null), wd('b', 4000, 'Bit WiFi', 'Ecuador', 'Bit WiFi'), wd('c', 1500, 'Bit Music', 'Colombia', 'Bit Music'),
+  ] });
+  ok(g.by_country[0].name === 'Sin especificar' && g.leaders.country.name === 'Ecuador' && g.leaders.country.won_usd === 4000, 'el país que más vende ignora «Sin especificar» (lo mayor, pero no es un país) y devuelve Ecuador');
+  ok(g.data_gaps.country_unassigned_usd === 9000, 'y informa cuánto de lo ganado no tiene país asignado (USD 9.000)');
+  ok(g.leaders.product.name === 'Bit WiFi' && g.data_gaps.product_unassigned_usd >= 0, 'el producto líder también es uno real');
+  const vacio = computeFinance({ invoices: [], payments: [], deals: [wd('x', 100, 'Bit WiFi', null, null)], rates: RATES, today: '2026-10-23' });
+  ok(vacio.leaders.country === null && vacio.data_gaps.country_unassigned_usd === 100, 'si todo está sin país, no hay líder (null) y la brecha es todo');
+}
+
 // ── 5) tratos estáticos (parte pura) ─────────────────────────────────────────────────────────────
 const { computeStale } = require('../src/utils/staleDeals');
 {
@@ -191,6 +204,21 @@ const srv = app.listen(0, async () => {
   r = await call('GET', '/api/invoices/summary');
   const vivas = fake.db.invoices.filter((x) => !(x.status === 'cancelada' && Number(x.paid_amount || 0) === 0)).length;
   ok(r.status === 200 && r.json.missing_rates.join() === 'PYG' && r.json.count === vivas && r.json.count_overdue >= 1 && typeof r.json.collection_rate_pct === 'number' && r.json.rates_updated_at, 'resumen: avisa de la moneda sin tasa, no cuenta la anulada sin cobros y trae atraso, tasa de cobranza y fecha de las tasas');
+
+  // marcar una factura como pagada registra el pago con su fecha (antes solo cambiaba el monto)
+  fake.db.invoices.push(inv('pay1', 'Tuco SAS', 500, 'USD'));
+  const pagos = () => fake.db.invoice_payments.filter((p) => p.invoice_id === 'pay1');
+  r = await call('PATCH', '/api/invoices/pay1', { status: 'pagada', paid_amount: 500 });
+  ok(r.status === 200 && pagos().length === 1 && pagos()[0].amount === 500 && pagos()[0].method === 'Marcada como pagada' && pagos()[0].paid_at, 'marcar «pagada» crea un pago por el monto cobrado, con su fecha');
+  r = await call('PATCH', '/api/invoices/pay1', { client_name: 'Tuco SAS (editado)' });
+  ok(pagos().length === 1, 'editar otra cosa de la factura no crea pagos');
+  r = await call('PATCH', '/api/invoices/pay1', { status: 'pendiente', paid_amount: 0 });
+  ok(pagos().length === 0 && get('pay1').paid_amount === 0, 'volver a «pendiente» retira ese pago');
+  r = await call('PATCH', '/api/invoices/pay1', { paid_amount: 200 }); r = await call('PATCH', '/api/invoices/pay1', { paid_amount: 500 });
+  ok(pagos().map((p) => p.amount).join() === '200,300', 'un cobro parcial y luego el resto quedan como dos pagos (200 y 300)');
+  fake.db.invoice_payments.push({ id: 'manual', invoice_id: 'pay1', amount: 50, method: 'Transferencia', paid_at: '2026-10-01T00:00:00Z' });
+  r = await call('PATCH', '/api/invoices/pay1', { paid_amount: 0, status: 'pendiente' });
+  ok(fake.db.invoice_payments.some((p) => p.id === 'manual') && pagos().length === 1, 'solo se retiran los pagos creados al marcar; un pago registrado a mano no se borra');
 
   // tratos estáticos
   fake.db.deals.push({ id: 'o1', title: 'Abierto viejo', value: 6000, currency: 'USD', status: 'abierto', owner_id: 'u-ana', created_at: '2026-01-01T00:00:00Z', companies: { name: 'Acme' }, pipelines: { name: 'Bit WiFi' }, pipeline_stages: { name: 'Demo' }, team_members: { full_name: 'Ana' } },
