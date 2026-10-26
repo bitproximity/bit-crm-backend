@@ -7,7 +7,11 @@ require('dotenv').config();
 // cualquier router.
 require('express-async-errors');
 const express = require('express');
-const cors = require('cors');
+const helmet = require('helmet');
+const { apiLimiter, publicFormSubmitLimiter, publicReadLimiter } = require('./middleware/rateLimits');
+const { jsonBodyParser } = require('./middleware/bodyLimits');
+const errorHandler = require('./middleware/errorHandler');
+const { buildCorsPolicy } = require('./middleware/corsPolicy');
 const compression = require('compression');
 const { clearAll: clearMemo } = require('./utils/memo');
 const { clearAuthCache } = require('./middleware/auth');
@@ -19,6 +23,9 @@ const app = express();
 // plano por dentro — sin esto, req.protocol siempre da 'http' aunque el
 // sitio público sea https, y rompe las URLs que arma el stub de OAuth.
 app.set('trust proxy', true);
+app.disable('x-powered-by');
+// Cabeceras de seguridad (no-sniff, HSTS, referrer, etc.). Sin CSP: esto es una API JSON, no sirve páginas.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' }, crossOriginOpenerPolicy: false }));
 
 // El servidor MCP y sus endpoints de OAuth deben responder a cualquier origen
 // (Claude.ai los consulta directo desde el navegador al conectar el conector) —
@@ -26,20 +33,11 @@ app.set('trust proxy', true);
 // que ese CORS restrictivo no les bloquee las peticiones.
 app.use('/', require('./routes/oauth'));
 
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || '*')
-  .split(',')
-  .map((o) => o.trim());
-
-app.use(
-  cors({
-    origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
-    exposedHeaders: ['Server-Timing'], // para poder leer los tiempos desde el navegador
-    // Cada petición con Authorization hace antes una consulta OPTIONS de verificación (preflight) = un
-    // viaje de red extra (~90 ms desde Panamá). Sin esta cabecera el navegador la repite casi siempre
-    // (por defecto la recuerda solo 5 s); con ella la recuerda 2 horas (el máximo de Chrome) por URL.
-    maxAge: 7200,
-  })
-);
+const cors = buildCorsPolicy(process.env.FRONTEND_ORIGIN);
+if (cors.wildcard) {
+  console.warn('[seguridad] FRONTEND_ORIGIN no está definido: la API acepta peticiones desde CUALQUIER sitio web. Defínelo en Railway (ej. https://crm.bitproximity.com); los formularios públicos seguirán funcionando desde otros sitios.');
+}
+app.use(cors.handler);
 app.use(requestTiming.middleware);
 // Compresión de respuestas (gzip/brotli): una lista de tratos pasa de ~106 KB a ~17 KB, y las
 // respuestas del dashboard/pipelines/empresas a una décima parte. No se toca /mcp ni nada que
@@ -52,8 +50,14 @@ app.use(
     },
   })
 );
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// Límites de cuerpo por ruta (ver middleware/bodyLimits.js)
+app.use(jsonBodyParser);
+app.use(express.urlencoded({ limit: '2mb', extended: true }));
+
+// Límites de peticiones (públicas más estrictas que la API con sesión)
+app.use('/api/public/lead-forms', (req, res, next) => (req.method === 'POST' ? publicFormSubmitLimiter : publicReadLimiter)(req, res, next));
+app.use('/api/public', publicReadLimiter);
+app.use(['/api', '/mcp'], apiLimiter);
 
 // El CRM es datos en vivo — nunca debería quedar una respuesta vieja guardada en el
 // camino (navegador, o un proxy/CDN como Cloudflare delante de Railway). Esta cabecera
@@ -138,7 +142,12 @@ const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/ser
 const { buildServer } = require('./mcp/server');
 const { requireAuth: mcpAuth } = require('./middleware/auth');
 
+// El MCP ejecuta consultas directas a la base (no pasa por los permisos de cada pantalla), así que solo lo usan administración y operaciones.
+// Antes cualquier persona con sesión (incluido el socio externo) podía crear una clave y operar sin restricciones.
+const MCP_ROLES = ['admin', 'operaciones'];
+
 app.post('/mcp', mcpAuth, async (req, res) => {
+  if (!MCP_ROLES.includes(req.teamMember?.role)) return res.status(403).json({ error: 'El acceso MCP está disponible solo para administración y operaciones.' });
   try {
     const server = buildServer(req.teamMember);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -152,11 +161,7 @@ app.post('/mcp', mcpAuth, async (req, res) => {
 });
 
 // Manejo de errores no capturados
-app.use((err, req, res, next) => {
-  console.error('Error no manejado en', req.method, req.originalUrl, ':', err);
-  if (res.headersSent) return next(err);
-  res.status(500).json({ error: err.message || 'Error interno del servidor' });
-});
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

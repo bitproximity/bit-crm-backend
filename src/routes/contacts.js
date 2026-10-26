@@ -1,6 +1,7 @@
 const express = require('express');
 const { loadCompanyMap, normalizeCompanyName, cleanName } = require('../utils/mergeRecords');
 const supabase = require('../config/supabase');
+const { escapeLike } = require('../utils/escape');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
@@ -40,7 +41,7 @@ router.get('/', async (req, res) => {
     // CADA palabra aparezca en algún campo (sin importar en cuál), "Juan Pérez" sí
     // encuentra a alguien con esos first_name/last_name separados.
     search.trim().split(/\s+/).filter(Boolean).forEach((word) => {
-      query = query.or(`first_name.ilike.%${word}%,last_name.ilike.%${word}%,email.ilike.%${word}%`);
+      { const w = escapeLike(word); if (w) query = query.or(`first_name.ilike.%${w}%,last_name.ilike.%${w}%,email.ilike.%${w}%`); }
     });
   }
 

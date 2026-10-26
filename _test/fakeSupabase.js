@@ -16,6 +16,8 @@ function createFakeDb(seed = {}) {
       in(c, vs) { st.f.push((r) => vs.includes(r[c])); return a; },
       gte(c, v) { st.f.push((r) => r[c] != null && String(r[c]) >= v); return a; }, lt(c, v) { st.f.push((r) => r[c] != null && String(r[c]) < v); return a; },
       not(c, op, v) { if (op === 'is') st.f.push((r) => (v === null ? r[c] != null : r[c] !== v)); return a; },
+      ilike(c, v) { const rx = new RegExp('^' + String(v).replace(/[.*+?^${}()|[\]]/g, '\\$&').replace(/\\\\([%_])/g, '\u0001$1').replace(/%/g, '.*').replace(/_/g, '.').replace(/\u0001(.)/g, '$1') + '$', 'i'); st.f.push((r) => rx.test(String(r[c] ?? ''))); return a; },
+      or() { return a; }, is(c, v) { st.f.push((r) => (v === null ? r[c] == null : r[c] === v)); return a; },
       insert(p) { st.op = 'insert'; st.payload = p; return a; }, update(p) { st.op = 'update'; st.payload = p; return a; },
       upsert(p, o) { st.op = 'upsert'; st.payload = p; st.opts = o; return a; }, delete() { st.op = 'delete'; return a; },
       then(res) {
@@ -61,7 +63,7 @@ function install(fake, { actorId = 'u-admin' } = {}) {
       requireAuth: (req, res, next) => { req.teamMember = { id: actorId, role: req.headers['x-role'] || 'admin', blocked_pages: [] }; next(); },
       requireRole: (...roles) => (req, res, next) => (roles.includes(req.teamMember.role) ? next() : res.status(403).json({ error: 'No tienes permisos para esta acción' })),
     };
-    if (/middleware\/pagePermissions$/.test(request)) return { requirePage: () => (req, res, next) => next() };
+    if (/middleware\/pagePermissions$/.test(request)) return { requirePage: () => (req, res, next) => next(), roleCanAccess: () => true, isBlockedForUser: () => false, BLOCKABLE_PAGES: ['facturacion', 'agenda_equipo', 'metricas', 'forecast', 'b2b', 'deals', 'productos'] };
     if (/(^|\/)audit$/.test(request)) return { logAudit: async (type, id, action, actor, changes) => { fake.db.audit_log.push({ type, id, action, actor, changes }); } };
     return origLoad.apply(this, arguments);
   };

@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const supabase = require('../config/supabase');
+const { fileUrls } = require('../utils/fileUrls');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -22,11 +23,8 @@ router.get('/', async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  const withUrls = data.map((f) => ({
-    ...f,
-    url: supabase.storage.from(BUCKET).getPublicUrl(f.file_path).data.publicUrl,
-  }));
-  res.json(withUrls);
+  const urls = await fileUrls(supabase, BUCKET, data.map((f) => f.file_path));
+  res.json(data.map((f) => ({ ...f, url: urls[f.file_path] })));
 });
 
 // POST /api/document-files  multipart/form-data: file, document_id
@@ -58,7 +56,7 @@ router.post('/', upload.single('file'), async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json({ ...data, url: supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl });
+  res.status(201).json({ ...data, url: (await fileUrls(supabase, BUCKET, [path]))[path] });
 });
 
 // DELETE /api/document-files/:id

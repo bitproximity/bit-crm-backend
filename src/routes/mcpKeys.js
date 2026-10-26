@@ -1,7 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -19,7 +19,8 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/mcp-keys  { label? } — genera una key nueva, la muestra UNA sola vez
-router.post('/', async (req, res) => {
+// Solo quienes pueden usar el MCP pueden crear claves (el MCP no respeta los permisos por pantalla).
+router.post('/', requireRole('admin', 'operaciones'), async (req, res) => {
   const rawKey = 'bitcrm_mcp_' + crypto.randomBytes(24).toString('hex');
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
   const keyPreview = rawKey.slice(-4);

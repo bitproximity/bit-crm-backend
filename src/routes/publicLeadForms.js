@@ -3,6 +3,7 @@ const cors = require('cors');
 const supabase = require('../config/supabase');
 const { sendEmail } = require('../utils/email');
 const { createNotification } = require('../utils/notify');
+const { escapeHtml: h, escapeIlikeValue } = require('../utils/escape');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -31,9 +32,27 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/public/lead-forms/:id/submit  { name, email?, phone?, company?, message?, custom_answers?: { field_id: value } }
+// Lo que escribe un visitante anónimo se recorta y se valida: antes cualquier texto, de cualquier largo y tipo, llegaba tal cual a la
+// base de datos y al correo de los administradores.
+const clip = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/;
+
 router.post('/:id/submit', async (req, res) => {
-  const { name, email, phone, company, message, custom_answers } = req.body;
-  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Falta el nombre.' });
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  // Campo trampa (oculto para personas): si viene lleno, es un robot. Se responde «ok» sin crear nada, para que no sepa que fue detectado.
+  if (typeof body.website === 'string' && body.website.trim() !== '') return res.status(201).json({ ok: true });
+
+  const name = clip(body.name, 120);
+  const email = clip(body.email, 200);
+  const phone = clip(body.phone, 40);
+  const company = clip(body.company, 160);
+  const message = clip(body.message, 2000);
+  let custom_answers = null;
+  if (body.custom_answers && typeof body.custom_answers === 'object' && !Array.isArray(body.custom_answers)) {
+    custom_answers = Object.fromEntries(Object.entries(body.custom_answers).slice(0, 40).map(([k, v]) => [k, typeof v === 'object' ? '' : String(v ?? '').slice(0, 1000)]));
+  }
+  if (!name) return res.status(400).json({ error: 'Falta el nombre.' });
+  if (email && !EMAIL_RE.test(email)) return res.status(400).json({ error: 'El correo no es válido.' });
 
   const { data: form } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
   if (!form) return res.status(404).json({ error: 'Formulario no encontrado.' });
@@ -41,30 +60,30 @@ router.post('/:id/submit', async (req, res) => {
 
   try {
     let companyId = null;
-    if (company && company.trim()) {
-      const { data: existing } = await supabase.from('companies').select('id').ilike('name', company.trim()).maybeSingle();
+    if (company) {
+      const { data: existing } = await supabase.from('companies').select('id').ilike('name', escapeIlikeValue(company)).maybeSingle();
       if (existing) companyId = existing.id;
       else {
-        const { data: created, error: coErr } = await supabase.from('companies').insert({ name: company.trim() }).select('id').single();
+        const { data: created, error: coErr } = await supabase.from('companies').insert({ name: company }).select('id').single();
         if (coErr) throw coErr;
         companyId = created.id;
       }
     }
 
-    const [firstName, ...rest] = String(name).trim().split(' ');
+    const [firstName, ...rest] = name.split(' ');
     let contactId = null;
-    if (email && email.trim()) {
-      const { data: existing } = await supabase.from('contacts').select('id').ilike('email', email.trim()).maybeSingle();
+    if (email) {
+      const { data: existing } = await supabase.from('contacts').select('id').ilike('email', escapeIlikeValue(email)).maybeSingle();
       if (existing) contactId = existing.id;
     }
     if (!contactId) {
       const { data: createdContact, error: ctErr } = await supabase
         .from('contacts')
         .insert({
-          first_name: firstName || name.trim(),
+          first_name: firstName || name,
           last_name: rest.join(' ') || null,
-          email: email?.trim() || null,
-          phone: phone?.trim() || null,
+          email: email || null,
+          phone: phone || null,
           company_id: companyId,
           source: `Formulario: ${form.name}`,
           status: 'nuevo',
@@ -78,7 +97,7 @@ router.post('/:id/submit', async (req, res) => {
     const { data: deal, error: dealErr } = await supabase
       .from('deals')
       .insert({
-        title: `Lead: ${company?.trim() || name.trim()}`,
+        title: `Lead: ${company || name}`,
         pipeline_id: form.pipeline_id,
         stage_id: form.stage_id,
         contact_id: contactId,
@@ -105,7 +124,7 @@ router.post('/:id/submit', async (req, res) => {
       }
     }
 
-    if (message && message.trim()) {
+    if (message) {
       // No es una promesa nativa (es el query builder de Supabase) — .catch() encadenado
       // directo falla con "is not a function". Si esto falla (ej. author_id no admite
       // nulo), no debe tumbar el envío del formulario — el trato ya se creó, que es lo
@@ -113,7 +132,7 @@ router.post('/:id/submit', async (req, res) => {
       try {
         await supabase.from('activities').insert({
           entity_type: 'deal', entity_id: deal.id, type: 'nota',
-          title: 'Mensaje del formulario', summary: message.trim(),
+          title: 'Mensaje del formulario', summary: message,
         });
       } catch (noteErr) {
         console.error('[lead-forms] no se pudo guardar la nota del mensaje:', noteErr.message);
@@ -154,7 +173,7 @@ async function notifyNewLead(form, dealId, submission, customAnswers) {
       .filter(([fieldId, value]) => form.field_ids.includes(fieldId) && value)
       .map(([fieldId, value]) => {
         const label = defs?.find((d) => d.id === fieldId)?.label || fieldId;
-        return `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">${label}</td><td style="padding:4px 0;">${value}</td></tr>`;
+        return `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">${h(label)}</td><td style="padding:4px 0;">${h(value)}</td></tr>`;
       })
       .join('');
   }
@@ -162,24 +181,24 @@ async function notifyNewLead(form, dealId, submission, customAnswers) {
   const dealUrl = `${PUBLIC_APP_URL}/deals/${dealId}`;
   const html = `
     <div style="font-family: sans-serif; color: #1a1a2e; max-width: 480px;">
-      <p>Nuevo lead desde <strong>${form.name}</strong>:</p>
+      <p>Nuevo lead desde <strong>${h(form.name)}</strong>:</p>
       <table style="border-collapse:collapse;">
-        <tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Nombre</td><td style="padding:4px 0;">${submission.name}</td></tr>
-        ${submission.email ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Correo</td><td style="padding:4px 0;">${submission.email}</td></tr>` : ''}
-        ${submission.phone ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Teléfono</td><td style="padding:4px 0;">${submission.phone}</td></tr>` : ''}
-        ${submission.company ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Empresa</td><td style="padding:4px 0;">${submission.company}</td></tr>` : ''}
+        <tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Nombre</td><td style="padding:4px 0;">${h(submission.name)}</td></tr>
+        ${submission.email ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Correo</td><td style="padding:4px 0;">${h(submission.email)}</td></tr>` : ''}
+        ${submission.phone ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Teléfono</td><td style="padding:4px 0;">${h(submission.phone)}</td></tr>` : ''}
+        ${submission.company ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Empresa</td><td style="padding:4px 0;">${h(submission.company)}</td></tr>` : ''}
         ${customLines}
       </table>
-      ${submission.message ? `<p style="margin-top:12px;"><strong>Mensaje:</strong><br/>${submission.message}</p>` : ''}
+      ${submission.message ? `<p style="margin-top:12px;"><strong>Mensaje:</strong><br/>${h(submission.message)}</p>` : ''}
       <a href="${dealUrl}" style="display:inline-block;margin-top:16px;color:#8500FF;">Ver el trato en Bit CRM →</a>
     </div>
   `;
 
   for (const r of recipients) {
-    sendEmail({ to: r.email, subject: `Nuevo lead: ${form.name}`, html }).catch(() => {});
+    sendEmail({ to: r.email, subject: `Nuevo lead: ${String(form.name).replace(/[\r\n]+/g, ' ')}`, html }).catch(() => {});
     createNotification({
       recipient_id: r.id, type: 'new_lead',
-      title: `Nuevo lead: ${submission.company?.trim() || submission.name}`,
+      title: `Nuevo lead: ${submission.company || submission.name}`,
       body: `Desde el formulario "${form.name}"`,
       entity_type: 'deal', entity_id: dealId, link: `/deals/${dealId}`,
     });

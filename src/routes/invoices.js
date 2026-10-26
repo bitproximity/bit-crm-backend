@@ -6,6 +6,7 @@ const { requirePage } = require('../middleware/pagePermissions');
 const { todayInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
 const { buildConverter, round2 } = require('../utils/currency');
+const { escapeLike } = require('../utils/escape');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -46,7 +47,7 @@ router.get('/', async (req, res) => {
   if (source_account) query = query.eq('source_account', source_account);
   // Búsqueda libre por razón social o número de factura — para revisar/confirmar rápido
   // sin tener que acordarse del número exacto.
-  if (q) query = query.or(`client_name.ilike.%${q}%,invoice_number.ilike.%${q}%`);
+  if (q && escapeLike(q)) query = query.or(`client_name.ilike.%${escapeLike(q)}%,invoice_number.ilike.%${escapeLike(q)}%`);
   // month (YYYY-MM) es más específico que year (YYYY) — si vienen los dos, gana month.
   if (month) {
     const [y, m] = month.split('-').map(Number);

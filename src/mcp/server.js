@@ -1,6 +1,7 @@
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { z } = require('zod');
 const supabase = require('../config/supabase');
+const { escapeLike } = require('../utils/escape');
 const { fetchAll } = require('../utils/fetchAll');
 const { mergeCompanies, findDuplicateCompanyGroups, cleanName } = require('../utils/mergeRecords');
 const { BLOCKABLE_PAGES } = require('../middleware/pagePermissions');
@@ -213,7 +214,7 @@ function buildServer(teamMember) {
     },
     async ({ search, limit }) => {
       let query = supabase.from('contacts').select('id, first_name, last_name, email, phone, companies(name)').order('created_at', { ascending: false }).limit(limit);
-      if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
+      if (search && escapeLike(search)) query = query.or(`first_name.ilike.%${escapeLike(search)}%,last_name.ilike.%${escapeLike(search)}%,email.ilike.%${escapeLike(search)}%`);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return textResult({ count: data.length, contacts: data.map((c) => ({ id: c.id, name: `${c.first_name} ${c.last_name || ''}`.trim(), email: c.email, phone: c.phone, company: c.companies?.name })) });
@@ -477,6 +478,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ ordered_pipeline_names }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede reordenar los embudos.');
       const results = [];
       for (let i = 0; i < ordered_pipeline_names.length; i++) {
         const name = ordered_pipeline_names[i];
@@ -503,6 +505,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     async ({ pipeline_name, stage_name, position }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede crear etapas del embudo.');
       const { data: pipeline } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name, position)').ilike('name', pipeline_name).maybeSingle();
       if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
       if (pipeline.pipeline_stages.some((s) => s.name.toLowerCase() === stage_name.toLowerCase())) {
@@ -540,6 +543,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ pipeline_name, old_stage_name, new_stage_name }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede renombrar etapas del embudo.');
       const { data: pipeline } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name)').ilike('name', pipeline_name).maybeSingle();
       if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
       const stage = pipeline.pipeline_stages.find((s) => s.name.toLowerCase() === old_stage_name.toLowerCase());
@@ -563,6 +567,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     async ({ pipeline_name, stage_name, move_deals_to_stage_name }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede eliminar etapas del embudo.');
       const { data: pipeline } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name)').ilike('name', pipeline_name).maybeSingle();
       if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
       const stage = pipeline.pipeline_stages.find((s) => s.name.toLowerCase() === stage_name.toLowerCase());
@@ -596,6 +601,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     async ({ deal_id }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede borrar tratos.');
       const { data: deal } = await supabase.from('deals').select('id, title').eq('id', deal_id).maybeSingle();
       if (!deal) return errorResult('Trato no encontrado.');
       const { error } = await supabase.from('deals').delete().eq('id', deal_id);
@@ -617,6 +623,7 @@ function buildServer(teamMember) {
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     async ({ pipeline_name, keep_deal_ids, confirm }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede borrar tratos en bloque.');
       const { data: pipeline } = await supabase.from('pipelines').select('id, name').ilike('name', pipeline_name).maybeSingle();
       if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
 
