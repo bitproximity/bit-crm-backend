@@ -74,6 +74,30 @@ const limSrv = limApp.listen(0, async () => {
   limSrv.close();
 });
 
+// ── 3b) CORS: qué sitios web pueden llamar a la API ─────────────────────────────────────────────────
+const { buildCorsPolicy, FIRST_PARTY_ORIGINS } = require('../src/middleware/corsPolicy');
+const preflight = (port, p, origin) => new Promise((resolve) => {
+  const req = http.request({ port, path: p, method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' } }, (res) => { res.resume(); res.on('end', () => resolve({ status: res.statusCode, acao: res.headers['access-control-allow-origin'] || null })); });
+  req.end();
+});
+const corsCheck = async (envValue) => {
+  const app = express(); app.use(buildCorsPolicy(envValue).handler); app.all('*', (req, res) => res.json({ ok: true }));
+  const srv = await new Promise((r) => { const s2 = app.listen(0, () => r(s2)); }); const port = srv.address().port; const out = {};
+  for (const [k, o, p] of [['crm', 'https://crm.bitproximity.com', '/api/deals'], ['prospeccion_api', 'https://prospeccion.bitproximity.com', '/api/prospeccion-tool/leads'], ['prospeccion_mcp', 'https://prospeccion.bitproximity.com', '/mcp'], ['ajeno', 'https://sitio-malo.test', '/api/deals'], ['ajeno_publico', 'https://sitio-malo.test', '/api/public/lead-forms/x/submit'], ['extra', 'https://otro.bitproximity.com', '/api/deals']]) out[k] = await preflight(port, p, o);
+  srv.close(); return out;
+};
+(async () => {
+  ok(FIRST_PARTY_ORIGINS.includes('https://prospeccion.bitproximity.com') && FIRST_PARTY_ORIGINS.includes('https://crm.bitproximity.com'), 'los sitios propios (CRM y Prospección B2B) están en la lista fija');
+  let c = await corsCheck('https://crm.bitproximity.com');   // exactamente lo que dejó a Prospección sin conexión
+  ok(c.crm.acao === 'https://crm.bitproximity.com' && c.prospeccion_api.acao === 'https://prospeccion.bitproximity.com' && c.prospeccion_mcp.acao === 'https://prospeccion.bitproximity.com', 'con FRONTEND_ORIGIN solo con el CRM, Prospección B2B sigue conectando (API y MCP): ya no depende de la variable');
+  ok(c.ajeno.acao === null && c.extra.acao === null, 'un sitio ajeno o un subdominio no listado NO queda permitido');
+  ok(c.ajeno_publico.acao === '*', 'solo el formulario público acepta cualquier sitio (se pega en webs de clientes)');
+  c = await corsCheck('https://crm.bitproximity.com,https://otro.bitproximity.com');
+  ok(c.extra.acao === 'https://otro.bitproximity.com' && c.prospeccion_api.acao === 'https://prospeccion.bitproximity.com' && c.ajeno.acao === null, 'FRONTEND_ORIGIN AGREGA sitios (lista separada por comas) sin quitar los propios');
+  c = await corsCheck(undefined);
+  ok(c.ajeno.acao === '*' && buildCorsPolicy(undefined).wildcard === true, 'sin FRONTEND_ORIGIN todo sigue abierto, como antes (y el servidor lo avisa)');
+})();
+
 // ── 4) límites de peticiones ────────────────────────────────────────────────────────────────────────
 const rlApp = express(); rlApp.use(express.json());
 rlApp.post('/api/public/lead-forms/:id/submit', publicFormSubmitLimiter, (req, res) => res.status(201).json({ ok: true }));

@@ -6,9 +6,14 @@
 // Separado de server.js para que el día que se defina FRONTEND_ORIGIN los formularios incrustados no dejen de funcionar.
 const cors = require('cors');
 
+// Sitios PROPIOS que llaman a esta API desde el navegador. Siempre están permitidos, esté como esté FRONTEND_ORIGIN: restringir esa variable
+// a un solo sitio dejó sin conexión a «Prospección B2B» (prospeccion.bitproximity.com: «Failed to fetch»). FRONTEND_ORIGIN solo AGREGA otros.
+const FIRST_PARTY_ORIGINS = ['https://crm.bitproximity.com', 'https://prospeccion.bitproximity.com'];
+
 function buildCorsPolicy(frontendOrigin) {
-  const allowed = String(frontendOrigin || '*').split(',').map((o) => o.trim()).filter(Boolean);
-  const wildcard = allowed.length === 0 || allowed.includes('*');
+  const configured = String(frontendOrigin || '*').split(',').map((o) => o.trim()).filter(Boolean);
+  const wildcard = configured.length === 0 || configured.includes('*');
+  const allowed = [...new Set([...FIRST_PARTY_ORIGINS, ...configured])];
   // Cada petición con Authorization hace antes una consulta OPTIONS; con maxAge el navegador la recuerda 2 horas (el máximo de Chrome).
   const common = { exposedHeaders: ['Server-Timing'], maxAge: 7200 };
   const publicCors = cors({ ...common, origin: '*' });
@@ -17,4 +22,4 @@ function buildCorsPolicy(frontendOrigin) {
   return { allowed, wildcard, handler };
 }
 
-module.exports = { buildCorsPolicy };
+module.exports = { buildCorsPolicy, FIRST_PARTY_ORIGINS };
