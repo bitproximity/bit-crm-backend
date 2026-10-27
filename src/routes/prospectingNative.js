@@ -8,8 +8,8 @@
 //       – revelar email/teléfono (consume créditos → solo admin, tope por importación),
 //       – crear un trato en el embudo/etapa elegidos (si el rol puede ver "deals").
 //   · Todo queda en el audit_log con via: 'prospeccion'.
-// Apollo (mixed_people/api_search) es gratis pero devuelve nombres ofuscados y sin email;
-// Lusha cobra créditos por cada resultado de la búsqueda.
+// Apollo (mixed_people/api_search) devuelve nombres ofuscados y sin email, y exige un plan de pago de Apollo (el gratuito responde 403);
+// Lusha (API V3) cobra créditos por cada resultado de la búsqueda.
 
 const fetch = require('node-fetch');
 const supabase = require('../config/supabase');
@@ -28,6 +28,33 @@ const cleanRanges = (arr) => (Array.isArray(arr) ? arr : []).map(String).filter(
 const normName = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 class UserError extends Error {}
+
+// Mensajes claros cuando Lusha o Apollo rechazan una petición: qué pasó y qué hacer, no solo el código.
+function lushaErrorMessage(status, json) {
+  const detail = String(json?.message || json?.error || '').trim();
+  const text = {
+    401: 'La API key de Lusha es inválida o fue revocada. Genera una nueva en dashboard.lusha.com → API y actualiza LUSHA_API_KEY en Railway.',
+    402: 'Tu cuenta de Lusha no tiene créditos suficientes para esta búsqueda.',
+    403: 'Tu cuenta de Lusha no tiene acceso a esta API (cuenta inactiva o API V3 no habilitada). Escribe a support@lusha.com.',
+    410: 'Lusha retiró la API antigua para tu cuenta y esta búsqueda aún usaba el endpoint viejo.',
+    429: 'Lusha limitó las peticiones por minuto/hora/día. Espera un momento e intenta de nuevo.',
+    451: 'Lusha bloqueó esta búsqueda por normativa de datos (GDPR).',
+  }[status];
+  return text ? `${text}${detail ? ` (${detail})` : ''}` : `Lusha respondió ${status}: ${detail || 'error desconocido'}`;
+}
+
+function apolloErrorMessage(status, json) {
+  const detail = String(json?.error || json?.message || '').trim();
+  if (status === 403 && /free plan|not included|upgrade/i.test(detail)) {
+    return 'Apollo: tu plan gratuito no incluye la búsqueda de personas por API (ni con la master key). Usa Lusha, o sube tu plan de Apollo (apollo.io/pricing) para activarla.';
+  }
+  const text = {
+    401: 'La API key de Apollo es inválida o fue revocada. Revisa APOLLO_API_KEY en Railway.',
+    422: 'Apollo no aceptó los filtros de esta búsqueda. Prueba con menos filtros.',
+    429: 'Apollo limitó las peticiones. Espera un momento e intenta de nuevo.',
+  }[status];
+  return text ? `${text}${detail ? ` (${detail})` : ''}` : `Apollo respondió ${status}: ${detail || 'error desconocido'}`;
+}
 
 // ── Búsqueda ──────────────────────────────────────────────────────────────
 async function apolloSearch({ title, country, industry, company, keywords, sizes, page }) {
@@ -48,7 +75,7 @@ async function apolloSearch({ title, country, industry, company, keywords, sizes
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new UserError(`Apollo respondió ${res.status}: ${json.error || json.message || 'error desconocido'}`);
+  if (!res.ok) throw new UserError(apolloErrorMessage(res.status, json));
 
   const candidates = (json.people || []).map((p) => ({
     key: `apollo:${p.id}`,
@@ -69,6 +96,9 @@ async function apolloSearch({ title, country, industry, company, keywords, sizes
   };
 }
 
+// Lusha API V3 (POST /v3/contacts/prospecting). La V2 (/prospecting/contact/search) dejó de estar disponible para la cuenta y respondía
+// 410. Diferencias: paginación en `pagination` (página desde 0), clave en la cabecera `api_key`, y los contactos llegan en `results` con
+// cargo, empresa y ubicación como objetos. Devuelve solo una vista previa (sin email/teléfono): eso se revela al importar.
 async function lushaSearch({ department, country, company, sizes, page }) {
   const key = process.env.LUSHA_API_KEY;
   if (!key) throw new UserError('Lusha no está configurado: falta la variable LUSHA_API_KEY en Railway (Settings → Variables).');
@@ -85,33 +115,31 @@ async function lushaSearch({ department, country, company, sizes, page }) {
     if (lushaSizes.length) filters.companies.include.sizes = lushaSizes;
   }
 
-  const res = await fetch('https://api.lusha.com/prospecting/contact/search', {
+  const res = await fetch('https://api.lusha.com/v3/contacts/prospecting', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', api_key: key },
-    body: JSON.stringify({ pages: { page: page - 1, size: PAGE_SIZE }, filters }),
+    body: JSON.stringify({ pagination: { page: page - 1, size: PAGE_SIZE }, filters, options: { includePartialProfiles: true } }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new UserError(`Lusha respondió ${res.status}: ${json.message || json.error || 'error desconocido'}`);
+  if (!res.ok) throw new UserError(lushaErrorMessage(res.status, json));
 
-  const candidates = (json.data || []).map((c) => {
-    const full = typeof c.name === 'string' ? c.name : [c.name?.first, c.name?.last].filter(Boolean).join(' ');
-    const [first, ...rest] = String(c.firstName || full || '').split(' ');
-    return {
-      key: `lusha:${c.contactId || c.id}`,
-      source: 'lusha',
-      externalId: c.contactId || c.id,
-      firstName: c.firstName || first || '',
-      lastName: c.lastName || rest.join(' '),
-      title: c.jobTitle || c.title || '',
-      companyName: c.companyName || c.company?.name || '',
-      country: c.location?.country || c.country || country || '',
-      linkedinUrl: c.socialLinks?.linkedin || null,
-    };
-  });
+  const rows = Array.isArray(json.results) ? json.results : [];
+  const candidates = rows.filter((c) => c && c.id && !c.error).map((c) => ({
+    key: `lusha:${c.id}`,
+    source: 'lusha',
+    externalId: String(c.id),
+    firstName: c.firstName || '',
+    lastName: c.lastName || '',
+    title: (typeof c.jobTitle === 'string' ? c.jobTitle : c.jobTitle?.title) || '',
+    companyName: c.company?.name || '',
+    country: c.location?.country || country || '',
+    linkedinUrl: c.socialLinks?.linkedin || null,
+  }));
+  const total = Number.isFinite(json.pagination?.total) ? json.pagination.total : null;
   return {
     candidates,
-    total: json.pagination?.totalResults ?? json.totalResults ?? null,
-    hasMore: candidates.length >= PAGE_SIZE,
+    total,
+    hasMore: total != null ? page * PAGE_SIZE < total : rows.length >= PAGE_SIZE,
   };
 }
 
@@ -195,7 +223,7 @@ async function apolloRevealById(externalId) {
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': key },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new UserError(`Apollo respondió ${res.status}: ${data.error || data.message || 'error desconocido'}`);
+  if (!res.ok) throw new UserError(apolloErrorMessage(res.status, data));
   const p = data.person;
   if (!p) throw new UserError('Apollo no encontró coincidencias.');
   const email = p.email && !/email_not_unlocked/i.test(p.email) ? p.email : null;
@@ -381,4 +409,4 @@ async function importCandidates(req, res) {
   }
 }
 
-module.exports = { search, options, importCandidates };
+module.exports = { search, options, importCandidates, lushaSearch, apolloSearch, lushaErrorMessage, apolloErrorMessage };
