@@ -1,5 +1,3 @@
-Claude
-Server · JS
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { z } = require('zod');
 const supabase = require('../config/supabase');
@@ -8,17 +6,17 @@ const { fetchAll } = require('../utils/fetchAll');
 const { mergeCompanies, findDuplicateCompanyGroups, cleanName } = require('../utils/mergeRecords');
 const { BLOCKABLE_PAGES } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
- 
+
 // ── Helpers compartidos ──────────────────────────────────────────────
- 
+
 function textResult(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], structuredContent: data };
 }
- 
+
 function errorResult(message) {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
 }
- 
+
 async function resolvePipelineAndStage(pipelineName, stageName) {
   const { data: pipeline } = await supabase.from('pipelines').select('*, pipeline_stages(*)').ilike('name', pipelineName).maybeSingle();
   if (!pipeline) return { error: `No encontré un embudo llamado "${pipelineName}". Usa bitcrm_list_pipelines para ver los nombres exactos.` };
@@ -31,7 +29,7 @@ async function resolvePipelineAndStage(pipelineName, stageName) {
   }
   return { pipeline, stage };
 }
- 
+
 async function resolveOrCreateContact(name, email, phone) {
   if (!name && !email) return null;
   if (email) {
@@ -46,7 +44,7 @@ async function resolveOrCreateContact(name, email, phone) {
     .single();
   return created?.id || null;
 }
- 
+
 async function resolveOrCreateCompany(name) {
   if (!name) return null;
   const clean = cleanName(name);
@@ -55,13 +53,13 @@ async function resolveOrCreateCompany(name) {
   const { data: created } = await supabase.from('companies').insert({ name: clean }).select('id').single();
   return created?.id || null;
 }
- 
+
 // ── Construye un McpServer nuevo por request, con las herramientas ──
 // atadas al equipo autenticado (teamMember) vía closure. Esto es lo que
 // recomienda el SDK para transporte HTTP sin estado (stateless).
 function buildServer(teamMember) {
   const server = new McpServer({ name: 'bit-crm-mcp-server', version: '1.0.0' });
- 
+
   // ─── DEALS ───
   server.registerTool(
     'bitcrm_list_deals',
@@ -105,7 +103,7 @@ function buildServer(teamMember) {
       });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_get_deal',
     {
@@ -123,7 +121,7 @@ function buildServer(teamMember) {
       return textResult({ ...deal, recent_activity: activities || [] });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_create_deal',
     {
@@ -144,12 +142,12 @@ function buildServer(teamMember) {
     async ({ title, pipeline_name, stage_name, value, currency, contact_name, contact_email, company_name }) => {
       const resolved = await resolvePipelineAndStage(pipeline_name, stage_name);
       if (resolved.error) return errorResult(resolved.error);
- 
+
       const [contactId, companyId] = await Promise.all([
         resolveOrCreateContact(contact_name, contact_email, null),
         resolveOrCreateCompany(company_name),
       ]);
- 
+
       const { data: deal, error } = await supabase
         .from('deals')
         .insert({
@@ -163,7 +161,7 @@ function buildServer(teamMember) {
       return textResult({ created: true, deal_id: deal.id, title: deal.title, pipeline: resolved.pipeline.name, stage: resolved.stage.name });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_update_deal_stage',
     {
@@ -201,7 +199,7 @@ function buildServer(teamMember) {
       return errorResult('Debes indicar stage_name u outcome.');
     }
   );
- 
+
   // ─── CONTACTOS Y EMPRESAS ───
   server.registerTool(
     'bitcrm_list_contacts',
@@ -222,7 +220,7 @@ function buildServer(teamMember) {
       return textResult({ count: data.length, contacts: data.map((c) => ({ id: c.id, name: `${c.first_name} ${c.last_name || ''}`.trim(), email: c.email, phone: c.phone, company: c.companies?.name })) });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_create_contact',
     {
@@ -248,7 +246,7 @@ function buildServer(teamMember) {
       return textResult({ created: true, contact_id: data.id });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_list_companies',
     {
@@ -269,7 +267,7 @@ function buildServer(teamMember) {
       return textResult({ total: count, offset, count: data.length, companies: data });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_find_duplicate_companies',
     {
@@ -287,7 +285,7 @@ function buildServer(teamMember) {
       }
     }
   );
- 
+
   server.registerTool(
     'bitcrm_merge_companies',
     {
@@ -319,7 +317,7 @@ function buildServer(teamMember) {
       }
     }
   );
- 
+
   // ─── TAREAS ───
   server.registerTool(
     'bitcrm_list_tasks',
@@ -346,7 +344,7 @@ function buildServer(teamMember) {
       return textResult({ count: data.length, tasks: data.map((t) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, due_date: t.due_date, project: t.projects?.name })) });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_create_task',
     {
@@ -374,7 +372,7 @@ function buildServer(teamMember) {
       return textResult({ created: true, task_id: data.id });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_update_task',
     {
@@ -399,7 +397,7 @@ function buildServer(teamMember) {
       return textResult({ updated: true, task_id, ...update });
     }
   );
- 
+
   // ─── PROYECTOS ───
   server.registerTool(
     'bitcrm_list_projects',
@@ -422,7 +420,7 @@ function buildServer(teamMember) {
       return textResult({ count: data.length, projects: data.map((p) => ({ id: p.id, name: p.name, status: p.status, space: p.spaces?.name })) });
     }
   );
- 
+
   // ─── MÉTRICAS ───
   server.registerTool(
     'bitcrm_get_metrics_summary',
@@ -451,7 +449,7 @@ function buildServer(teamMember) {
       });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_list_pipelines',
     {
@@ -468,7 +466,7 @@ function buildServer(teamMember) {
       });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_reorder_pipelines',
     {
@@ -492,7 +490,7 @@ function buildServer(teamMember) {
       return textResult({ reordered: true, order: results });
     }
   );
- 
+
   // ─── ETAPAS DE PIPELINE ───
   server.registerTool(
     'bitcrm_create_pipeline_stage',
@@ -515,13 +513,13 @@ function buildServer(teamMember) {
       }
       const stages = [...pipeline.pipeline_stages].sort((a, b) => a.position - b.position);
       const insertPos = position === undefined ? stages.length : Math.min(position, stages.length);
- 
+
       // Corre las posiciones de las etapas siguientes para abrir espacio
       const toShift = stages.filter((s) => s.position >= insertPos);
       for (const s of toShift) {
         await supabase.from('pipeline_stages').update({ position: s.position + 1 }).eq('id', s.id);
       }
- 
+
       const { data: created, error } = await supabase
         .from('pipeline_stages')
         .insert({ pipeline_id: pipeline.id, name: stage_name, position: insertPos })
@@ -531,7 +529,7 @@ function buildServer(teamMember) {
       return textResult({ created: true, pipeline: pipeline.name, stage: created.name, position: created.position });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_rename_pipeline_stage',
     {
@@ -555,7 +553,7 @@ function buildServer(teamMember) {
       return textResult({ updated: true, pipeline: pipeline.name, old_name: old_stage_name, new_name: new_stage_name });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_delete_pipeline_stage',
     {
@@ -574,9 +572,9 @@ function buildServer(teamMember) {
       if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
       const stage = pipeline.pipeline_stages.find((s) => s.name.toLowerCase() === stage_name.toLowerCase());
       if (!stage) return errorResult(`El embudo "${pipeline.name}" no tiene una etapa llamada "${stage_name}".`);
- 
+
       const { count: dealsInStage } = await supabase.from('deals').select('*', { count: 'exact', head: true }).eq('stage_id', stage.id);
- 
+
       if (dealsInStage > 0) {
         if (!move_deals_to_stage_name) {
           return errorResult(`La etapa "${stage_name}" tiene ${dealsInStage} trato(s). Indica move_deals_to_stage_name para reubicarlos antes de borrar.`);
@@ -586,13 +584,13 @@ function buildServer(teamMember) {
         const { error: moveError } = await supabase.from('deals').update({ stage_id: targetStage.id }).eq('stage_id', stage.id);
         if (moveError) return errorResult(moveError.message);
       }
- 
+
       const { error } = await supabase.from('pipeline_stages').delete().eq('id', stage.id);
       if (error) return errorResult(error.message);
       return textResult({ deleted: true, pipeline: pipeline.name, stage: stage_name, deals_moved: dealsInStage > 0 ? dealsInStage : 0, moved_to: dealsInStage > 0 ? move_deals_to_stage_name : null });
     }
   );
- 
+
   // ─── BORRADO ───
   server.registerTool(
     'bitcrm_delete_deal',
@@ -611,7 +609,7 @@ function buildServer(teamMember) {
       return textResult({ deleted: true, deal_id, title: deal.title });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_bulk_delete_deals_except',
     {
@@ -628,14 +626,14 @@ function buildServer(teamMember) {
       if (teamMember.role !== 'admin') return errorResult('Solo un admin puede borrar tratos en bloque.');
       const { data: pipeline } = await supabase.from('pipelines').select('id, name').ilike('name', pipeline_name).maybeSingle();
       if (!pipeline) return errorResult(`No encontré un embudo llamado "${pipeline_name}".`);
- 
+
       const { data: toDelete, error: selError } = await supabase
         .from('deals')
         .select('id, title')
         .eq('pipeline_id', pipeline.id)
         .not('id', 'in', `(${keep_deal_ids.join(',')})`);
       if (selError) return errorResult(selError.message);
- 
+
       if (!confirm) {
         return textResult({
           preview: true,
@@ -646,7 +644,7 @@ function buildServer(teamMember) {
           note: 'Nada fue borrado. Vuelve a llamar con confirm=true para ejecutar.',
         });
       }
- 
+
       const idsToDelete = toDelete.map((d) => d.id);
       let deletedCount = 0;
       const chunkSize = 200;
@@ -656,11 +654,11 @@ function buildServer(teamMember) {
         if (delError) return errorResult(`Se borraron ${deletedCount} antes de fallar: ${delError.message}`);
         deletedCount += count || chunk.length;
       }
- 
+
       return textResult({ deleted: true, pipeline: pipeline.name, deleted_count: deletedCount, kept_count: keep_deal_ids.length });
     }
   );
- 
+
   // ─── FACTURACIÓN ───
   // Lectura de facturas emitidas (Stripe, Alegra, Facturero Móvil y manuales), con montos también en USD
   // a la tasa del día. Mismas reglas que la pantalla Facturación: solo admin y respetando blocked_pages.
@@ -727,7 +725,7 @@ function buildServer(teamMember) {
       });
     }
   );
- 
+
   // ─── EQUIPO ───
   server.registerTool(
     'bitcrm_list_team',
@@ -753,7 +751,7 @@ function buildServer(teamMember) {
       });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_invite_team_member',
     {
@@ -774,7 +772,7 @@ function buildServer(teamMember) {
       return textResult({ invited: true, email_sent: out.email_sent, member: { id: out.member.id, full_name: out.member.full_name, email: out.member.email, role: out.member.role } });
     }
   );
- 
+
   server.registerTool(
     'bitcrm_update_team_member_access',
     {
@@ -798,11 +796,8 @@ function buildServer(teamMember) {
       return textResult({ updated: true, member: { id: data.id, full_name: data.full_name, role: data.role, blocked_pages: data.blocked_pages || [] } });
     }
   );
- 
+
   return server;
 }
- 
-module.exports = { buildServer };
- 
-Claude terminó la respuesta
 
+module.exports = { buildServer };
