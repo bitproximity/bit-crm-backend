@@ -20,4 +20,19 @@ const publicFormSubmitLimiter = rateLimit({ ...base, windowMs: 60 * 60 * 1000, l
 // Leer lo público (definición del formulario, reporte compartido): evita que se enumeren o raspen.
 const publicReadLimiter = rateLimit({ ...base, windowMs: 60 * 1000, limit: 120, keyGenerator: byIp, message: msg('Demasiadas peticiones. Intenta de nuevo en un minuto.') });
 
-module.exports = { apiLimiter, makeApiLimiter, publicFormSubmitLimiter, publicReadLimiter };
+// Reporte del asistente financiero: pocas lecturas, token propio. Más estricto que el límite general de /api.
+const REPORTING_RATE_LIMIT_PER_MINUTE = 60;
+const makeReportingLimiter = (limit = REPORTING_RATE_LIMIT_PER_MINUTE) => rateLimit({
+  ...base,
+  windowMs: 60 * 1000,
+  limit,
+  keyGenerator: (req) => {
+    const auth = req.headers.authorization;
+    if (typeof auth === 'string' && auth.length > 0) return `rpt:${crypto.createHash('sha256').update(auth).digest('hex')}`;
+    return byIp(req);
+  },
+  skip: (req) => req.method === 'OPTIONS',
+  message: msg('Demasiadas peticiones. Intenta de nuevo en un minuto.'),
+});
+
+module.exports = { apiLimiter, makeApiLimiter, publicFormSubmitLimiter, publicReadLimiter, makeReportingLimiter, REPORTING_RATE_LIMIT_PER_MINUTE };

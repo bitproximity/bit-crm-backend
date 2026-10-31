@@ -58,7 +58,11 @@ Antes de usar la app hay que crear el primer usuario a mano:
 | Plantillas onboarding | `GET/POST/PATCH/DELETE /api/templates` |
 | Dashboard | `GET /api/dashboard` |
 
-Todas las rutas (salvo `/health`) requieren header `Authorization: Bearer <supabase_jwt>`.
+Todas las rutas (salvo `/health`) requieren header `Authorization: Bearer …`.
+El CRM usa el JWT de Supabase. `/api/reporting` es aparte: solo lee con el token
+`REPORTING_API_TOKEN` y una conexión propia de Postgres (`REPORTING_DATABASE_URL`,
+rol `cfo_readonly`). Si esas variables no están, esas rutas responden 503 y el
+resto de la API sigue igual.
 
 ## Trazabilidad
 
