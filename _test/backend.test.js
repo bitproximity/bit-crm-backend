@@ -68,8 +68,20 @@ const fakeFetch = async (url, opts = {}) => {
     if (id === 'ap_fail') return J({ message: 'sin créditos' }, 402);
     return J({ person: { first_name: 'Real', last_name: 'Apellido' + id, email: `${id}@empresa.com`, linkedin_url: 'https://linkedin.com/in/' + id, title: 'Gerente' } });
   }
-  if (url.includes('lusha.com') && url.includes('contact/search')) {
-    return J({ data: Array.from({ length: 25 }, (_, i) => ({ contactId: `lu${i}`, firstName: `Luis${i}`, lastName: 'Perez', jobTitle: 'Director', companyName: `Lu Co ${i}`, location: { country: 'Panama' } })) });
+  // Lusha API V3: POST /v3/contacts/prospecting. La respuesta trae `results` (id, cargo y empresa como objetos) y `pagination.total`.
+  if (url.includes('lusha.com') && url.includes('/v3/contacts/prospecting')) {
+    const page = body && body.pagination ? body.pagination.page : 0;
+    return J({
+      pagination: { page, size: 25, total: 100 },
+      results: Array.from({ length: 25 }, (_, i) => ({
+        id: `lu${i}`,
+        firstName: `Luis${i}`,
+        lastName: 'Perez',
+        jobTitle: { title: 'Director', departments: ['Marketing'] },
+        company: { name: `Lu Co ${i}` },
+        location: { country: 'Panama' },
+      })),
+    });
   }
   if (url.includes('lusha.com') && url.includes('search-and-enrich')) {
     return J({ results: [{ emails: [{ email: 'luis@luco.com' }], phones: [{ number: '+507111' }], jobTitle: { title: 'Director' } }] });
@@ -145,16 +157,22 @@ const srv = app.listen(0, async () => {
   r = await C('POST', '/api/prospecting/search', { provider: 'apollo', title: '' });
   ok(r.st === 400 && /cargo/.test(r.j.error), 'Apollo sin cargo → mensaje claro');
 
-  // ---- búsqueda Lusha con filtros de empresa
+  // ---- búsqueda Lusha (API V3) con filtros de empresa
   extCalls.length = 0;
   r = await C('POST', '/api/prospecting/search', { provider: 'lusha', department: 'Marketing', country: 'Panama', company: 'Banco Sol, Cadena X', sizes: ['51,200'], page: 3 });
-  const lu = extCalls.find((c) => c.url.includes('contact/search')).body;
-  ok(lu.pages.page === 2 && lu.pages.size === 25, 'Lusha: página 3 → índice 2 (base 0)');
-  ok(JSON.stringify(lu.filters.companies.include.names) === '["Banco Sol","Cadena X"]' && lu.filters.companies.include.sizes[0].min === 51 && lu.filters.companies.include.sizes[0].max === 200, 'Lusha: empresa y tamaño → filtros de companies');
-  ok(r.j.hasMore === true, 'Lusha: hay más (página completa)');
+  const luCall = extCalls.find((c) => c.url.includes('/v3/contacts/prospecting'));
+  const lu = luCall && luCall.body;
+  ok(!!luCall && luCall.url === 'https://api.lusha.com/v3/contacts/prospecting' && !extCalls.some((c) => /\/prospecting\/contact\/search/.test(c.url)), 'Lusha: la petición va a /v3/contacts/prospecting');
+  ok(!!lu && lu.pagination.page === 2 && lu.pagination.size === 25 && !('pages' in lu), 'Lusha: página 3 → pagination.page 2 (base 0), size 25');
+  ok(!!lu && JSON.stringify(lu.filters.contacts.include) === JSON.stringify({ departments: ['Marketing'], locations: [{ country: 'Panama' }] }), 'Lusha: departamento y país en filters.contacts');
+  ok(!!lu && JSON.stringify(lu.filters.companies.include.names) === '["Banco Sol","Cadena X"]' && lu.filters.companies.include.sizes[0].min === 51 && lu.filters.companies.include.sizes[0].max === 200, 'Lusha: empresa y tamaño → filtros de companies');
+  ok(!!lu && luCall.headers.api_key === 'lk' && lu.options.includePartialProfiles === true, 'Lusha: la clave va en api_key e incluye perfiles parciales');
+  const lu0 = r.j && r.j.candidates && r.j.candidates[0];
+  ok(r.st === 200 && r.j.candidates.length === 25 && lu0 && lu0.key === 'lusha:lu0' && lu0.externalId === 'lu0' && lu0.firstName === 'Luis0' && lu0.title === 'Director' && lu0.companyName === 'Lu Co 0' && lu0.country === 'Panama', 'Lusha V3: id, cargo (objeto) y empresa se mapean a la tarjeta');
+  ok(r.j && r.j.hasMore === true && r.j.total === 100 && r.j.page === 3, 'Lusha: hay más (total 100, página 3 de 25)');
   extCalls.length = 0;
-  await C('POST', '/api/prospecting/search', { provider: 'lusha', department: 'Marketing' });
-  ok(!extCalls[0].body.filters.companies, 'Lusha sin filtros de empresa: petición idéntica a la de antes');
+  r = await C('POST', '/api/prospecting/search', { provider: 'lusha', department: 'Marketing' });
+  ok(extCalls[0] && extCalls[0].url.includes('/v3/contacts/prospecting') && !extCalls[0].body.filters.companies && extCalls[0].body.pagination.page === 0 && r.st === 200, 'Lusha sin filtros de empresa: no envía filters.companies y la página 1 es pagination.page 0');
 
   // ---- importación básica
   const cand = (i, over = {}) => ({ key: `apollo:c${i}`, source: 'apollo', externalId: `c${i}`, firstName: `Persona${i}`, lastName: `Ap***`, title: 'CEO', companyName: `Cliente ${i} SAS`, country: 'Panama', ...over });
