@@ -14,7 +14,7 @@ stub('../src/utils/notify', { createNotification: async (n) => { fake.db.notific
 
 const express = require(path.resolve(__dirname, '../node_modules/express'));
 const { escapeHtml, escapeLike, escapeIlikeValue } = require('../src/utils/escape');
-const { fileUrls } = require('../src/utils/fileUrls');
+const { fileUrls, TTL_SECONDS } = require('../src/utils/fileUrls');
 const { jsonBodyParser } = require('../src/middleware/bodyLimits');
 const errorHandler = require('../src/middleware/errorHandler');
 const { publicFormSubmitLimiter, publicReadLimiter, makeApiLimiter } = require('../src/middleware/rateLimits');
@@ -28,16 +28,51 @@ ok(escapeLike('"quoted\' `x` \\') === 'quoted x', 'escapeLike: comillas, acentos
 ok(escapeIlikeValue('Acme, Inc. (LLC)') === 'Acme, Inc. (LLC)' && escapeIlikeValue('50%_x\\y') === '50\\%\\_x\\\\y', 'escapeIlikeValue: la puntuación de un nombre se conserva; solo se escapan los comodines');
 
 // ── 2) enlaces a archivos ───────────────────────────────────────────────────────────────────────────
+// deal-files y document-files son privados. No hay bucket público en código ni migraciones:
+// si la firma falla, el enlace es null y getPublicUrl no se llama.
 (async () => {
-  const mkSupa = (signedFails) => ({ storage: { from: () => ({
-    createSignedUrls: async (paths) => (signedFails ? { data: null, error: { message: 'x' } } : { data: paths.map((p) => ({ path: p, signedUrl: `https://s/${p}?token=abc` })), error: null }),
-    getPublicUrl: (p) => ({ data: { publicUrl: `https://s/public/${p}` } }),
-  }) } });
-  let u = await fileUrls(mkSupa(false), 'deal-files', ['a/1.pdf', 'a/1.pdf', 'b/2.pdf', null]);
-  ok(Object.keys(u).length === 2 && u['a/1.pdf'] === 'https://s/a/1.pdf?token=abc', 'los archivos se sirven con enlace FIRMADO (con vencimiento), sin repetir ni incluir vacíos');
-  u = await fileUrls(mkSupa(true), 'deal-files', ['a/1.pdf']);
-  ok(u['a/1.pdf'] === 'https://s/public/a/1.pdf', 'si la firma falla, se cae al enlace público para no romper la descarga');
-  ok(Object.keys(await fileUrls(mkSupa(false), 'x', [])).length === 0, 'sin archivos no hace ninguna petición');
+  const calls = { from: 0, public: 0, ttl: null };
+  const mkSupa = (mode) => ({ storage: { from: () => {
+    calls.from += 1;
+    return {
+      createSignedUrls: async (paths, ttl) => {
+        calls.ttl = ttl;
+        if (mode === 'throw') throw new Error('boom');
+        if (mode === 'error') return { data: null, error: { message: 'x' } };
+        if (mode === 'partial') {
+          return {
+            data: paths.map((p) => (p.endsWith('no.pdf')
+              ? { path: p, error: 'missing', signedUrl: null }
+              : { path: p, signedUrl: `https://s/${p}?token=abc`, error: null })),
+            error: null,
+          };
+        }
+        return { data: paths.map((p) => ({ path: p, signedUrl: `https://s/${p}?token=abc` })), error: null };
+      },
+      getPublicUrl: (p) => { calls.public += 1; return { data: { publicUrl: `https://s/public/${p}` } }; },
+    };
+  } } });
+  calls.public = 0;
+  let u = await fileUrls(mkSupa('ok'), 'deal-files', ['a/1.pdf', 'a/1.pdf', 'b/2.pdf', null, '']);
+  ok(Object.keys(u).length === 2 && u['a/1.pdf'] === 'https://s/a/1.pdf?token=abc' && u['b/2.pdf'] === 'https://s/b/2.pdf?token=abc', 'los archivos de un depósito privado se sirven con enlace FIRMADO, sin repetir ni incluir vacíos');
+  ok(calls.ttl === TTL_SECONDS && TTL_SECONDS === 60 * 60 && calls.public === 0, 'la firma vence en 1 hora y no se pide un enlace público');
+  calls.public = 0;
+  u = await fileUrls(mkSupa('ok'), 'document-files', ['d/3.pdf']);
+  ok(u['d/3.pdf'] === 'https://s/d/3.pdf?token=abc' && calls.public === 0, 'document-files (también privado) solo recibe enlace firmado');
+  calls.public = 0;
+  u = await fileUrls(mkSupa('error'), 'deal-files', ['a/1.pdf']);
+  ok(u['a/1.pdf'] === null && calls.public === 0, 'si la firma falla, el enlace es null: nunca una URL pública');
+  calls.public = 0;
+  u = await fileUrls(mkSupa('throw'), 'document-files', ['a/1.pdf']);
+  ok(u['a/1.pdf'] === null && calls.public === 0, 'si firmar lanza una excepción, también es null y no hay enlace público');
+  calls.public = 0;
+  u = await fileUrls(mkSupa('partial'), 'deal-files', ['a/1.pdf', 'a/no.pdf']);
+  ok(u['a/1.pdf'] === 'https://s/a/1.pdf?token=abc' && u['a/no.pdf'] === null && calls.public === 0, 'un archivo que no se pudo firmar queda en null; el resto conserva su enlace firmado');
+  calls.public = 0;
+  u = await fileUrls(mkSupa('error'), 'otro-bucket', ['a/1.pdf']);
+  ok(u['a/1.pdf'] === null && calls.public === 0, 'no hay depósitos públicos: un bucket desconocido tampoco cae a getPublicUrl');
+  const before = calls.from;
+  ok(Object.keys(await fileUrls(mkSupa('ok'), 'deal-files', [])).length === 0 && Object.keys(await fileUrls(mkSupa('ok'), 'deal-files', [null, ''])).length === 0 && calls.from === before, 'sin archivos no hace ninguna petición');
 })();
 
 // ── 3) límites de cuerpo y manejo de errores ────────────────────────────────────────────────────────

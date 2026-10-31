@@ -68,8 +68,8 @@ const fakeFetch = async (url, opts = {}) => {
     if (id === 'ap_fail') return J({ message: 'sin créditos' }, 402);
     return J({ person: { first_name: 'Real', last_name: 'Apellido' + id, email: `${id}@empresa.com`, linkedin_url: 'https://linkedin.com/in/' + id, title: 'Gerente' } });
   }
-  if (url.includes('lusha.com') && url.includes('contact/search')) {
-    return J({ data: Array.from({ length: 25 }, (_, i) => ({ contactId: `lu${i}`, firstName: `Luis${i}`, lastName: 'Perez', jobTitle: 'Director', companyName: `Lu Co ${i}`, location: { country: 'Panama' } })) });
+  if (url.includes('lusha.com') && url.includes('/v3/contacts/prospecting')) {
+    return J({ results: Array.from({ length: 25 }, (_, i) => ({ id: `lu${i}`, firstName: `Luis${i}`, lastName: 'Perez', jobTitle: 'Director', company: { name: `Lu Co ${i}` }, location: { country: 'Panama' } })) });
   }
   if (url.includes('lusha.com') && url.includes('search-and-enrich')) {
     return J({ results: [{ emails: [{ email: 'luis@luco.com' }], phones: [{ number: '+507111' }], jobTitle: { title: 'Director' } }] });
@@ -148,8 +148,8 @@ const srv = app.listen(0, async () => {
   // ---- búsqueda Lusha con filtros de empresa
   extCalls.length = 0;
   r = await C('POST', '/api/prospecting/search', { provider: 'lusha', department: 'Marketing', country: 'Panama', company: 'Banco Sol, Cadena X', sizes: ['51,200'], page: 3 });
-  const lu = extCalls.find((c) => c.url.includes('contact/search')).body;
-  ok(lu.pages.page === 2 && lu.pages.size === 25, 'Lusha: página 3 → índice 2 (base 0)');
+  const lu = extCalls.find((c) => c.url.includes('/v3/contacts/prospecting')).body;
+  ok(lu.pagination.page === 2 && lu.pagination.size === 25, 'Lusha: página 3 → índice 2 (base 0)');
   ok(JSON.stringify(lu.filters.companies.include.names) === '["Banco Sol","Cadena X"]' && lu.filters.companies.include.sizes[0].min === 51 && lu.filters.companies.include.sizes[0].max === 200, 'Lusha: empresa y tamaño → filtros de companies');
   ok(r.j.hasMore === true, 'Lusha: hay más (página completa)');
   extCalls.length = 0;
