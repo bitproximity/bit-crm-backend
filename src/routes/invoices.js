@@ -7,6 +7,7 @@ const { todayInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
 const { buildConverter, round2 } = require('../utils/currency');
 const { escapeLike } = require('../utils/escape');
+const { buildReminder } = require('../utils/overdueReminder');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -43,7 +44,8 @@ router.get('/', async (req, res) => {
 
   if (deal_id) query = query.eq('deal_id', deal_id);
   if (company_id) query = query.eq('company_id', company_id);
-  if (status) query = query.eq('status', status);
+  if (status === 'vencida') query = query.in('status', ['pendiente', 'parcial']).lt('due_date', todayInTz());
+  else if (status) query = query.eq('status', status);
   if (source_account) query = query.eq('source_account', source_account);
   // Búsqueda libre por razón social o número de factura — para revisar/confirmar rápido
   // sin tener que acordarse del número exacto.
@@ -164,6 +166,15 @@ router.get('/summary', async (req, res) => {
 });
 
 // GET /api/invoices/:id — factura completa con líneas y pagos
+// GET /api/invoices/:id/reminder?lang=es|en — borrador del recordatorio de pago (para, asunto, texto)
+router.get('/:id/reminder', async (req, res) => {
+  try {
+    res.json(await buildReminder(req.params.id, req.query.lang));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
   const [{ data: invoice, error }, { data: lineItems }, { data: payments }] = await Promise.all([

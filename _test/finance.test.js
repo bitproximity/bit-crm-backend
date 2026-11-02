@@ -49,6 +49,26 @@ const { mergeIncoming } = require('../src/utils/invoiceMerge');
 
 // ── 3) vinculación factura ↔ trato ganado (parte pura) ───────────────────────────────────────────
 const linker = require('../src/utils/invoiceLinker');
+// ── 3b) memoria del cliente facturado (razón social ≠ marca) ──
+{
+  const cmp = [{ id: 'q1', name: 'Quiznos Costa Rica' }, { id: 'k1', name: 'KFC Bahamas' }];
+  const dl = [
+    { id: 'dq', title: 'Quiznos Costa Rica', company_id: 'q1', value: 170, currency: 'USD', closed_at: '2026-06-01T12:00:00Z', status: 'ganado' },
+    { id: 'dk1', title: 'KFC Music', company_id: 'k1', value: 360, currency: 'USD', closed_at: '2026-05-01T12:00:00Z', status: 'ganado' },
+    { id: 'dk2', title: 'KFC WiFi', company_id: 'k1', value: 900, currency: 'USD', closed_at: '2026-05-02T12:00:00Z', status: 'ganado' },
+  ];
+  const mk = (id, client, total, extra = {}) => ({ id, invoice_number: id, client_name: client, total, paid_amount: 0, currency: 'USD', issue_date: '2026-10-01', status: 'pendiente', source_account: 'X', company_id: null, deal_id: null, created_at: '2026-10-22T10:00:00Z', ...extra });
+  const invs = [
+    mk('h1', 'SNSA Inc', 170, { company_id: 'q1', deal_id: 'dq' }), mk('h2', 'SNSA Inc', 170),
+    mk('h3', 'Kentucky Foods Group Ltd.', 360, { company_id: 'k1', deal_id: 'dk1' }), mk('h4', 'Kentucky Foods Group Ltd.', 360), mk('h5', 'Kentucky Foods Group Ltd.', 1234),
+  ];
+  const rec = linker.buildReconciliation({ invoices: invs, deals: dl, companies: cmp, rates: [], year: 2026 });
+  const by = Object.fromEntries(rec.unlinked_invoices.map((r) => [r.id, r]));
+  ok(by.h2.confidence === 'alta' && by.h2.company_id === 'q1' && by.h2.suggestions[0].deal_id === 'dq', 'SNSA Inc (razón social) va a Quiznos Costa Rica y a su trato por la memoria de facturas anteriores');
+  ok(by.h4.confidence === 'alta' && by.h4.suggestions[0].deal_id === 'dk1', 'cliente con varios tratos: la factura del mismo monto que la anterior va al mismo contrato');
+  ok(by.h5.confidence !== 'alta' && by.h5.company_id === 'k1', 'si el monto no coincide y hay varios tratos, se sugiere la empresa pero no se vincula el trato solo');
+}
+
 const companies = [
   { id: 'c1', name: 'ETH Soluciones Integrales SAS' }, { id: 'c2', name: 'Grupo Ramos' }, { id: 'c3a', name: 'Dos Iguales' }, { id: 'c3b', name: 'Dos Iguales' }, { id: 'c4', name: 'Tuco SAS' },
 ];

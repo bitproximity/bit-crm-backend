@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const syncStatus = require('./syncStatus');
 const { clearAll: clearMemo } = require('./memo');
 const { applyAutoLinks } = require('./invoiceLinker');
+const { runOverdueDigest } = require('./overdueReminder');
 
 // Corre la sincronización de facturas SOLA cada cierto tiempo — Mario ya no necesita
 // apretar "Sincronizar" a mano, cada factura nueva de Stripe o Alegra llega al CRM por
@@ -56,6 +57,12 @@ async function runAll() {
   await runOnce('Alegra', syncAlegra);
   await runOnce('Facturero Movil', syncFacturermovil);
   await linkNewInvoices();
+  try {
+    const d = await runOverdueDigest();
+    if (d.notified) console.log(`[invoice-scheduler] aviso de vencidas: ${d.overdue} facturas, USD ${d.total_usd} → ${d.notified} admin(s)`);
+  } catch (err) {
+    console.error('[invoice-scheduler] aviso de vencidas falló:', err.message);
+  }
 }
 
 function startInvoiceScheduler() {

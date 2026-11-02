@@ -35,7 +35,20 @@ function buildContext({ invoices, deals, companies, rates }) {
     wonByCompany.get(d.company_id).push(d);
   }
   const linkedDealIds = new Set((invoices || []).filter((i) => i.deal_id && !isVoid(i)).map((i) => i.deal_id));
-  return { converter, companyName, companiesByName, wonByCompany, linkedDealIds };
+  // Memoria por cliente facturado: si las facturas anteriores de «SNSA Inc» ya se vincularon (a mano) a una
+  // empresa/trato, las siguientes de ese mismo cliente van al mismo lugar. Resuelve el caso típico de la razón
+  // social distinta a la marca (SNSA Inc → Quiznos Costa Rica), que por nombre nunca coincide.
+  const historyByClient = new Map();
+  for (const i of invoices || []) {
+    if (isVoid(i) || (!i.company_id && !i.deal_id)) continue;
+    const key = normalizeCompanyName(i.client_name || '');
+    if (!key) continue;
+    if (!historyByClient.has(key)) historyByClient.set(key, { companies: new Set(), deals: new Set() });
+    const h = historyByClient.get(key);
+    if (i.company_id) h.companies.add(i.company_id);
+    if (i.deal_id) h.deals.add(i.deal_id);
+  }
+  return { converter, companyName, companiesByName, wonByCompany, linkedDealIds, historyByClient };
 }
 
 // Empresa de la factura: la que ya tiene, o la única que coincide por nombre (nunca una adivinanza entre varias).
@@ -43,7 +56,18 @@ function companyIdFor(inv, ctx) {
   if (inv.company_id) return { id: inv.company_id, how: 'existente' };
   const key = normalizeCompanyName(inv.client_name || '');
   const ids = key ? ctx.companiesByName.get(key) : null;
-  return ids && ids.length === 1 ? { id: ids[0], how: 'nombre' } : { id: null, how: null };
+  if (ids && ids.length === 1) return { id: ids[0], how: 'nombre' };
+  // Sin coincidencia por nombre: la empresa a la que siempre se vincularon las facturas de este cliente
+  const h = key && ctx.historyByClient ? ctx.historyByClient.get(key) : null;
+  if (h && h.companies.size === 1) return { id: [...h.companies][0], how: 'historial' };
+  return { id: null, how: null };
+}
+
+// Trato al que siempre se vincularon las facturas de este cliente (facturación recurrente del mismo contrato)
+function historyDealFor(inv, ctx) {
+  const key = normalizeCompanyName(inv.client_name || '');
+  const h = key && ctx.historyByClient ? ctx.historyByClient.get(key) : null;
+  return h && h.deals.size === 1 ? [...h.deals][0] : null;
 }
 
 function sameAmount(inv, deal, converter) {
@@ -54,7 +78,20 @@ function sameAmount(inv, deal, converter) {
 
 function suggestForInvoice(inv, ctx) {
   const company = companyIdFor(inv, ctx);
-  if (!company.id) return { company_id: null, company_how: null, confidence: 'ninguna', suggestions: [] };
+  // Memoria del cliente: solo cuando el nombre NO identifica a la empresa (razón social ≠ marca). Si el
+  // nombre ya coincide, manda la regla normal (y no se arrastra el trato de una factura anterior).
+  const histDeal = company.how === 'nombre' || company.how === 'existente' ? null : historyDealFor(inv, ctx);
+  if (!company.id && !histDeal) return { company_id: null, company_how: null, confidence: 'ninguna', suggestions: [] };
+  if (histDeal) {
+    const all = [...ctx.wonByCompany.values()].flat();
+    const d = all.find((x) => x.id === histDeal);
+    if (d) {
+      const sug = { deal_id: d.id, title: d.title, value: d.value, currency: d.currency, value_usd: round2(ctx.converter.toUsd(d.value, d.currency)), closed_at: d.closed_at || null, amount_match: sameAmount(inv, d, ctx.converter) };
+      const sameContract = sug.amount_match || (ctx.wonByCompany.get(d.company_id) || []).length <= 1;
+      if (sameContract) return { company_id: company.id || d.company_id || null, company_how: company.how || 'historial', confidence: 'alta', how: 'historial', suggestions: [sug] };
+    }
+    if (!company.id) return { company_id: d?.company_id || null, company_how: d?.company_id ? 'historial' : null, confidence: 'media', how: 'historial', suggestions: d ? [{ deal_id: d.id, title: d.title, value: d.value, currency: d.currency, value_usd: round2(ctx.converter.toUsd(d.value, d.currency)), closed_at: d.closed_at || null, amount_match: false }] : [] };
+  }
   const won = ctx.wonByCompany.get(company.id) || [];
   const suggestions = won
     .map((d) => ({
@@ -141,7 +178,7 @@ async function applyAutoLinks({ dryRun = false, createdSince = null, actorId = n
   for (const inv of candidates) {
     const sug = suggestForInvoice(inv, ctx);
     const update = {};
-    if (!inv.company_id && sug.company_id && sug.company_how === 'nombre') update.company_id = sug.company_id;
+    if (!inv.company_id && sug.company_id && (sug.company_how === 'nombre' || sug.company_how === 'historial')) update.company_id = sug.company_id;
     if (!inv.deal_id && sug.confidence === 'alta' && sug.suggestions[0]) update.deal_id = sug.suggestions[0].deal_id;
     if (Object.keys(update).length) plan.push({ invoice_id: inv.id, invoice_number: inv.invoice_number, ...update, deal_title: update.deal_id ? sug.suggestions[0].title : null });
   }
