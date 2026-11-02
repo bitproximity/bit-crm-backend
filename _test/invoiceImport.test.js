@@ -122,7 +122,7 @@ const srv = app.listen(0, async () => {
 
   // parse con PDFs reales
   const dir = process.env.INVOICE_PDF_DIR || '/mnt/user-data/uploads'; // opcional: con los PDFs reales se prueba de punta a punta
-  if (fs.existsSync(dir)) {
+  if (fs.existsSync(dir) && fs.readdirSync(dir).filter((f) => f.endsWith('.pdf')).length >= 12) {
     reset();
     const pdfs = fs.readdirSync(dir).filter((f) => f.endsWith('.pdf')).sort().slice(0, 12).map((f) => ({ name: f, data: fs.readFileSync(path.join(dir, f)).toString('base64') }));
     r = await post(port, '/api/invoices/import/parse', { source_account: 'Bithub SRL', files: pdfs });

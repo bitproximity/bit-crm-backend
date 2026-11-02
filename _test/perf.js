@@ -44,7 +44,7 @@ class Q {
   eq(c, v) { this.f.push((r) => pick(r, c) === v); return this; } neq(c, v) { this.f.push((r) => pick(r, c) !== v); return this; }
   is(c, v) { this.f.push((r) => (pick(r, c) ?? null) === v); return this; } in(c, a) { this.f.push((r) => a.includes(pick(r, c))); return this; }
   gte(c, v) { this.f.push((r) => String(pick(r, c) ?? '') >= String(v)); return this; } lt(c, v) { this.f.push((r) => String(pick(r, c) ?? '') < String(v)); return this; }
-  ilike(c, v) { this.f.push((r) => String(pick(r, c) ?? '').toLowerCase() === String(v).toLowerCase()); return this; } or() { return this; }
+  ilike(c, v) { this.f.push((r) => String(pick(r, c) ?? '').toLowerCase() === String(v).toLowerCase()); return this; } or() { return this; } not(c, op, v) { if (op === 'is') this.f.push((r) => (pick(r, c) ?? null) !== v); return this; }
   order() { return this; } range(a, b) { this.rg = [a, b]; return this; } limit(n) { this.lim = n; return this; }
   single() { this.one = 'single'; return this; } maybeSingle() { this.one = 'maybe'; return this; }
   then(res, rej) { stats.dbTrips++; sleep(LAT).then(() => { try { res(this.run()); } catch (e) { rej ? rej(e) : res({ data: null, error: { message: e.message } }); } }); }

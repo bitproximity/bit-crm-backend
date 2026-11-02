@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
+const { applyTemplateToProject } = require('../utils/applyTemplate');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -79,10 +80,26 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { data, error } = await supabase.from('projects').insert(req.body).select().single();
+  const { template_id, ...fields } = req.body || {};
+  const { data, error } = await supabase.from('projects').insert(fields).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
   await logAudit('project', data.id, 'created', req.teamMember.id);
+
+  // Opcional: carga las tareas de una plantilla al crear el proyecto
+  if (template_id) {
+    try {
+      const { tasks } = await applyTemplateToProject({
+        templateId: template_id,
+        projectId: data.id,
+        baseDate: data.start_date ? new Date(`${data.start_date}T12:00:00`) : new Date(),
+        createdBy: req.teamMember.id,
+      });
+      data.tasks_created = tasks.length;
+    } catch (err) {
+      data.template_error = err.message; // el proyecto ya existe; se avisa sin fallar
+    }
+  }
   res.status(201).json(data);
 });
 

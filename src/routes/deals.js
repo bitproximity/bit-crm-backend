@@ -134,6 +134,36 @@ router.get('/', async (req, res) => {
   // Métricas — así el detalle siempre cuadra con el número que lo llevó hasta acá.
   if (country) allDeals = allDeals.filter((d) => resolveDealCountry(d.companies?.country, d.pipelines?.name) === country);
 
+  // Próxima actividad de cada trato abierto (regla tipo Pipedrive: todo trato abierto debe tener
+  // una llamada/reunión/tarea agendada). Una sola consulta para todo el pipeline.
+  const openIds = allDeals.filter((d) => d.status === 'abierto').map((d) => d.id);
+  if (openIds.length) try {
+    const { data: pending, error: actErr } = await selectIn(
+      () => supabase.from('activities')
+        .select('entity_id, due_date, title, summary, type')
+        .eq('entity_type', 'deal')
+        .eq('done', false)
+        .not('due_date', 'is', null)
+        .or('type.is.null,type.neq.nota'),
+      'entity_id',
+      openIds
+    );
+    if (actErr) throw new Error(actErr.message); // sin datos no se marca a nadie como «sin actividad»
+    const next = new Map();
+    for (const a of pending || []) {
+      const cur = next.get(a.entity_id);
+      if (!cur || new Date(a.due_date) < new Date(cur.due_date)) next.set(a.entity_id, a);
+    }
+    for (const d of allDeals) {
+      if (d.status !== 'abierto') continue;
+      const a = next.get(d.id);
+      d.next_activity = a ? { due_date: a.due_date, title: a.title || a.summary || null, type: a.type } : null;
+    }
+  } catch (err) {
+    // La próxima actividad es un extra: si falla, el Pipeline se muestra igual (sin la marca)
+    console.error('next_activity:', err.message);
+  }
+
   res.json(allDeals);
 });
 

@@ -95,6 +95,7 @@ app.use('/api/team', require('./routes/team'));
 app.use('/api/contacts', require('./routes/contacts'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/duplicates', require('./routes/duplicates'));
+app.use('/api/dup-check', require('./routes/dupCheck'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/automation-rules', require('./routes/automationRules'));
 app.use('/api/quotas', require('./routes/quotas'));
