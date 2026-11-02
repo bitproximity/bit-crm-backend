@@ -126,6 +126,12 @@ app.use('/api/spaces', require('./routes/spaces'));
 app.use('/api/documents', require('./routes/documents'));
 // El import va ANTES: «/api/invoices/import/…» no debe caer en las rutas /:id de invoices
 app.use('/api/finance', require('./routes/finance'));
+// Asistente financiero. No usa el cliente service_role de Supabase: abre su propio
+// pool como cfo_readonly (REPORTING_DATABASE_URL). Si faltan las variables, estas
+// rutas responden 503 y el proceso arranca igual.
+const reportingRouter = require('./routes/reporting');
+reportingRouter.logReportingStatus();
+app.use('/api/reporting', reportingRouter);
 app.use('/api/stale-deals', require('./routes/staleDeals'));
 app.use('/api/invoices/import', require('./routes/invoiceImport'));
 app.use('/api/invoices', require('./routes/invoices'));
