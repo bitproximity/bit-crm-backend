@@ -201,15 +201,23 @@ router.get('/dashboard', async (req, res) => {
   // hacía que la leyenda mostrara 12 colores sin sentido cuando ya se había filtrado a 1.
   const visiblePipelines = pipeline_id ? (pipelines || []).filter((p) => p.id === pipeline_id) : pipelines || [];
 
-  let dealsQuery = supabase
-    .from('deals')
-    .select('id, value, currency, pipeline_id, company_id, status, probability, billing_frequency, hardware_type, product_line, created_at, closed_at, lost_reason, facturacion, companies(country), pipelines(name)');
-  if (pipeline_id) dealsQuery = dealsQuery.eq('pipeline_id', pipeline_id);
+  const BASE_COLS = 'id, value, currency, pipeline_id, company_id, stage_id, status, probability, billing_frequency, hardware_type, product_line, created_at, closed_at, lost_reason, facturacion, companies(country), pipelines(name)';
+  const buildDealsQuery = (cols) => {
+    let q = supabase.from('deals').select(cols);
+    if (pipeline_id) q = q.eq('pipeline_id', pipeline_id);
+    return q;
+  };
 
-  const [{ data: deals, error }, { data: rates }] = await Promise.all([
-    fetchAll(dealsQuery),
+  let [{ data: deals, error }, { data: rates }] = await Promise.all([
+    fetchAll(buildDealsQuery(`${BASE_COLS}, churned_at, churn_reason`)),
     supabase.from('exchange_rates').select('*'),
   ]);
+  // Si la migración 060 (churn) todavía no corrió, se calcula igual sin churn
+  let churnEnabled = true;
+  if (error && /churn/i.test(error.message || '')) {
+    churnEnabled = false;
+    ({ data: deals, error } = await fetchAll(buildDealsQuery(BASE_COLS)));
+  }
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -276,6 +284,41 @@ router.get('/dashboard', async (req, res) => {
     .map(({ label, count }) => ({ reason: label, count, pct: lostDeals.length ? Math.round((count / lostDeals.length) * 100) : 0 }))
     .sort((a, b) => b.count - a.count);
 
+  // ── Pérdidas por etapa: en qué etapa estaba el trato cuando se perdió, y por qué ──
+  // La etapa es la última del historial que no sea «Perdido»/«Ganado»; si no hay historial,
+  // la etapa actual del trato (si no es la de Perdido).
+  let deals_lost_by_stage = [];
+  if (lostDeals.length) {
+    const [{ data: stages }, { data: hist }] = await Promise.all([
+      supabase.from('pipeline_stages').select('id, name, position'),
+      selectIn(() => supabase.from('deal_stage_history').select('deal_id, to_stage_id, changed_at'), 'deal_id', lostDeals.map((d) => d.id), { tiebreak: ['deal_id', 'changed_at'] }),
+    ]);
+    const stageById = Object.fromEntries((stages || []).map((st) => [st.id, st]));
+    const isClosing = (id) => /^(perdid|ganad)/i.test(stageById[id]?.name || '');
+    const lastOpenStage = {};
+    (hist || []).sort((a, b) => String(a.changed_at).localeCompare(String(b.changed_at))).forEach((h) => {
+      if (h.to_stage_id && stageById[h.to_stage_id] && !isClosing(h.to_stage_id)) lastOpenStage[h.deal_id] = h.to_stage_id;
+    });
+    const byStage = {};
+    lostDeals.forEach((d) => {
+      const sid = lastOpenStage[d.id] || (d.stage_id && !isClosing(d.stage_id) ? d.stage_id : null);
+      const st = sid ? stageById[sid] : null;
+      const name = st?.name || '(sin etapa registrada)';
+      if (!byStage[name]) byStage[name] = { stage: name, position: st ? st.position : 99, count: 0, reasons: {} };
+      byStage[name].count += 1;
+      const r = d.lost_reason?.trim() || '(sin motivo)';
+      byStage[name].reasons[r] = (byStage[name].reasons[r] || 0) + 1;
+    });
+    deals_lost_by_stage = Object.values(byStage)
+      .sort((a, b) => a.position - b.position || b.count - a.count)
+      .map(({ stage, count, reasons }) => ({
+        stage,
+        count,
+        pct: Math.round((count / lostDeals.length) * 100),
+        top_reasons: Object.entries(reasons).map(([reason, c]) => ({ reason, count: c })).sort((a, b) => b.count - a.count).slice(0, 3),
+      }));
+  }
+
   // ── Average value of won deals: este año vs año anterior ──
   const wonThisYear = (deals || []).filter((d) => d.status === 'ganado' && d.closed_at >= yearStart && d.closed_at < yearEnd);
   const wonPrevYear = (deals || []).filter((d) => d.status === 'ganado' && d.closed_at >= prevYearStart && d.closed_at < prevYearEnd);
@@ -332,17 +375,40 @@ router.get('/dashboard', async (req, res) => {
     return freq === 'anual' ? raw / 12 : raw;
   };
 
+  // Churn: un ganado recurrente con churned_at ya no suma al MRR activo (desde esa fecha).
+  const curMonth = require('../utils/businessDate').todayInTz().slice(0, 7); // mes en la zona del negocio (Panamá)
   let mrrWon = 0, mrrPipeline = 0, mrrPipelineWeighted = 0;
+  let mrrChurnedMonth = 0, mrrChurnedTotal = 0, activeRecurring = 0, churnedMonthCount = 0, churnedTotalCount = 0;
   (deals || []).forEach((d) => {
     const m = monthlyValue(d);
-    if (d.status === 'ganado') mrrWon += m;
-    else if (d.status === 'abierto') {
+    if (d.status === 'ganado') {
+      if (d.churned_at) {
+        mrrChurnedTotal += m;
+        if (m > 0) churnedTotalCount += 1;
+        if (String(d.churned_at).slice(0, 7) === curMonth) { mrrChurnedMonth += m; if (m > 0) churnedMonthCount += 1; }
+      } else {
+        mrrWon += m;
+        if (m > 0) activeRecurring += 1;
+      }
+    } else if (d.status === 'abierto') {
       mrrPipeline += m;
       mrrPipelineWeighted += m * (Number(d.probability || 0) / 100);
     }
   });
 
+  const mrrStartOfMonth = mrrWon + mrrChurnedMonth; // MRR al inicio del mes (aprox.: activos + los que cancelaron este mes)
+  const churn = {
+    enabled: churnEnabled,
+    active_customers: activeRecurring,
+    mrr_churned_month: Math.round(mrrChurnedMonth),
+    churned_month_count: churnedMonthCount,
+    mrr_churned_total: Math.round(mrrChurnedTotal),
+    churned_total_count: churnedTotalCount,
+    churn_rate_month_pct: mrrStartOfMonth > 0 ? Math.round((mrrChurnedMonth / mrrStartOfMonth) * 1000) / 10 : 0,
+  };
+
   const mrr_arr = {
+    churn,
     mrr_won: Math.round(mrrWon),
     arr_won: Math.round(mrrWon * 12),
     mrr_pipeline: Math.round(mrrPipeline),
@@ -433,6 +499,7 @@ router.get('/dashboard', async (req, res) => {
     deal_duration_avg_days_won: avgDurationDaysWon,
     deal_duration_avg_days_lost: avgDurationDaysLost,
     deals_lost_by_reason,
+    deals_lost_by_stage,
     lost_total: lostDeals.length,
     won_avg_value: { current: Math.round(avgThisYear), previous: Math.round(avgPrevYear), pct_change: pctChange, count: wonThisYear.length },
     sales_by_country,
