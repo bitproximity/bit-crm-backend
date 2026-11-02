@@ -30,9 +30,17 @@ const ALEGRA = [
   alg(6, { total: 300, totalPaid: 0, status: 'void', dueDate: '2026-08-20' }),
 ];
 const STRIPE = [{ id: 'in_1', number: 'ST-1', status: 'paid', customer_name: 'Ensaladas', customer_email: 'x@y.z', currency: 'usd', subtotal: 8400, total: 8400, amount_paid: 8400, created: 1792000000, due_date: 1793000000 }];
+// Cobros: uno de factura (se ignora), uno suelto de Payment Link, uno suelto reembolsado y uno fallido
+let CHARGES = [
+  { object: 'charge', id: 'ch_inv1', invoice: 'in_1', status: 'succeeded', paid: true, amount: 8400, amount_captured: 8400, amount_refunded: 0, currency: 'usd', created: 1792000000 },
+  { object: 'charge', id: 'ch_link01', invoice: null, status: 'succeeded', paid: true, amount: 15000, amount_captured: 15000, amount_refunded: 0, currency: 'usd', created: 1792000000, receipt_number: '1234-5678', billing_details: { name: 'Café Uno', email: 'cafe@uno.com' }, description: 'Bit Music anual' },
+  { object: 'charge', id: 'ch_refund1', invoice: null, status: 'succeeded', paid: true, amount: 5000, amount_captured: 5000, amount_refunded: 5000, currency: 'usd', created: 1792000000, billing_details: { name: 'Devuelto SA' } },
+  { object: 'charge', id: 'ch_failed1', invoice: null, status: 'failed', paid: false, amount: 9900, amount_captured: 0, amount_refunded: 0, currency: 'usd', created: 1792000000 },
+];
 global.fetch = async (url) => {
   const u = String(url);
   if (u.includes('api.alegra.com')) return { ok: true, json: async () => (u.includes('start=0') ? ALEGRA : []) };
+  if (u.includes('api.stripe.com/v1/charges')) return { ok: true, json: async () => ({ data: CHARGES, has_more: false }) };
   if (u.includes('api.stripe.com')) return { ok: true, json: async () => ({ data: STRIPE, has_more: false }) };
   return { ok: false, json: async () => ({}) };
 };
@@ -71,7 +79,19 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
   // ── Stripe ──
   r = await sync.syncStripe('u-admin');
   ok(r.updated === 1 && row('s1').status === 'pagada' && row('s1').paid_amount === 84 && fake.db.invoice_payments.some((p) => p.invoice_id === 's1' && p.amount === 84), 'Stripe: la factura de USD 84 que se pagó allá aparece cobrada aquí, con su pago');
-  r = await sync.syncStripe('u-admin'); ok(r.updated === 0 && r.skipped === 1, 'Stripe repetido: sin cambios');
+  const link = fake.db.invoices.find((i) => i.external_id === 'ch_link01');
+  ok(link && link.status === 'pagada' && link.total === 150 && link.paid_amount === 150 && link.client_name === 'Café Uno' && link.invoice_number === '1234-5678', 'Stripe: un cobro de Payment Link sin factura se importa como factura pagada (USD 150, cliente y recibo)');
+  const ref = fake.db.invoices.find((i) => i.external_id === 'ch_refund1');
+  ok(ref && ref.status === 'cancelada' && ref.paid_amount === 0, 'un cobro suelto reembolsado completo queda cancelado, sin monto cobrado');
+  ok(!fake.db.invoices.some((i) => i.external_id === 'ch_inv1' || i.external_id === 'ch_failed1'), 'no se duplica el cobro de una factura ni se importa un cobro fallido');
+  ok(Array.isArray(r.failed) && r.failed.length === 0, 'sin rechazos: la lista de fallidos viene vacía');
+  r = await sync.syncStripe('u-admin'); ok(r.created === 0 && r.updated === 0 && r.skipped === 3, 'Stripe repetido: sin cambios (1 factura + 2 cobros sueltos)');
+  // reembolso posterior de un cobro ya importado → se actualiza
+  CHARGES = CHARGES.map((c) => (c.id === 'ch_link01' ? { ...c, amount_refunded: 5000 } : c));
+  r = await sync.syncStripe('u-admin');
+  const link2 = fake.db.invoices.find((i) => i.external_id === 'ch_link01');
+  ok(link2.status === 'pagada' && link2.paid_amount === 150, 'un reembolso posterior en Stripe no borra lo cobrado en el CRM (los cobros se manejan en el CRM, igual que con las facturas)');
+  ok(sync._test.chargeStatus({ amount: 100, amount_captured: 100, amount_refunded: 0 }) === 'pagada' && sync._test.chargeStatus({ amount: 100, amount_captured: 100, amount_refunded: 100 }) === 'cancelada', 'estado de cobro: pagado / reembolsado');
 
   // ── estado de la sincronización y programador ──
   const { runAll } = require('../src/utils/invoiceScheduler');

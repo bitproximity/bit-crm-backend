@@ -15,6 +15,7 @@ function record(source, result = {}) {
     skipped: result.skipped || 0,
     total_en_origen: result.total_en_alegra ?? result.total_en_stripe ?? result.total ?? null,
     discrepancies: (result.discrepancies || []).slice(0, 100),
+    failed: (result.failed || []).slice(0, 50), // registros que la base rechazó, con el motivo
   };
   state.last_run_at = at;
 }

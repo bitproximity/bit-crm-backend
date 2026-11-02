@@ -88,6 +88,7 @@ async function syncStripe(actorId) {
 
   let created = 0, updated = 0, skipped = 0;
   const discrepancies = [];
+  const failed = []; // facturas que la base rechazó — antes se descartaban sin avisar
   const known = await knownExternalInvoices('stripe'); // una consulta, en vez de una por factura
   for (const inv of allInvoices) {
     if (inv.status === 'draft') continue;
@@ -123,11 +124,84 @@ async function syncStripe(actorId) {
       created_by: actorId,
     });
     if (!error) { created++; known.set(String(inv.id), { id: null }); }
+    else failed.push({ id: inv.id, number: inv.number, client: name, error: error.message });
   }
 
-  if (actorId) await logAudit('invoice_sync', null, 'stripe_sync', actorId, { created, updated, skipped });
+  // 2) Cobros SIN factura (Payment Links / Checkout): Stripe no les crea factura, así que nunca
+  // llegaban. Se importan como factura pagada del CRM con su id de cobro (ch_…) para no duplicar.
+  const charges = await syncStripeCharges({ key, accountName, known, actorId, failed });
+  if (charges.error) return { error: `Cobros sin factura: ${charges.error}`, created, updated, skipped, failed, discrepancies };
+  created += charges.created; updated += charges.updated; skipped += charges.skipped;
+
+  if (actorId) await logAudit('invoice_sync', null, 'stripe_sync', actorId, { created, updated, skipped, failed: failed.length, charges_created: charges.created });
   if (created || updated) clearMemo();
-  return { created, updated, skipped, discrepancies, total_en_stripe: allInvoices.length };
+  return { created, updated, skipped, failed, discrepancies, total_en_stripe: allInvoices.length + charges.seen };
+}
+
+// Estado de un cobro suelto: reembolsado total → cancelada; parcial → parcial; resto → pagada.
+function chargeStatus(ch) {
+  const net = (ch.amount_captured ?? ch.amount) - (ch.amount_refunded || 0);
+  if (net <= 0) return 'cancelada';
+  if (ch.amount_refunded > 0) return 'parcial';
+  return 'pagada';
+}
+
+async function syncStripeCharges({ key, accountName, known, actorId, failed }) {
+  let all = [];
+  let startingAfter;
+  for (let page = 0; page < 10; page++) {
+    const url = new URL('https://api.stripe.com/v1/charges');
+    url.searchParams.set('limit', '100');
+    if (startingAfter) url.searchParams.set('starting_after', startingAfter);
+    // Versión fija de la API: en versiones nuevas el cobro ya no trae el campo `invoice`,
+    // que es justo lo que distingue un cobro suelto de uno que pertenece a una factura.
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${key}`, 'Stripe-Version': '2024-06-20' } });
+    const data = await r.json();
+    if (!r.ok) return { error: data.error?.message || 'Error consultando cobros de Stripe' };
+    all = all.concat(data.data || []);
+    if (!data.has_more || !(data.data || []).length) break;
+    startingAfter = data.data[data.data.length - 1].id;
+  }
+
+  let created = 0, updated = 0, skipped = 0, seen = 0;
+  for (const ch of all) {
+    if (!ch || ch.object !== 'charge') continue;
+    if (ch.invoice) continue;                     // pertenece a una factura: ya se importa arriba
+    if (ch.status !== 'succeeded' || !ch.paid) continue;
+    seen++;
+    const amount = Math.round((ch.amount_captured ?? ch.amount) / 100 * 100) / 100;
+    const refunded = Math.round((ch.amount_refunded || 0) / 100 * 100) / 100;
+    const paid = Math.max(0, Math.round((amount - refunded) * 100) / 100);
+    const existing = known.get(String(ch.id));
+    if (existing) {
+      const r = await alignExisting(existing, { status: chargeStatus(ch), paid_amount: paid, total: amount, subtotal: amount, tax: 0 }, actorId, 'Stripe');
+      if (r.updated) updated++; else skipped++;
+      continue;
+    }
+    const name = ch.billing_details?.name || ch.customer_name || null;
+    const email = ch.billing_details?.email || ch.receipt_email || null;
+    const day = dateInTz(new Date(ch.created * 1000));
+    const { error } = await insertInvoiceTolerant({
+      invoice_number: ch.receipt_number || `CH-${String(ch.id).slice(-8).toUpperCase()}`,
+      currency: String(ch.currency || 'usd').toUpperCase(),
+      subtotal: amount,
+      tax: 0,
+      total: amount,
+      paid_amount: paid,
+      status: chargeStatus(ch),
+      issue_date: day,
+      due_date: day,
+      notes: `Cobro de Stripe sin factura (Payment Link / Checkout) (${accountName}) - ${name || 'Sin nombre'}${email ? ` (${email})` : ''}${ch.description ? ` · ${ch.description}` : ''}`,
+      client_name: name,
+      source_account: accountName,
+      external_source: 'stripe',
+      external_id: ch.id,
+      created_by: actorId,
+    });
+    if (!error) { created++; known.set(String(ch.id), { id: null }); }
+    else failed.push({ id: ch.id, number: ch.receipt_number || ch.id, client: name || email, error: error.message });
+  }
+  return { created, updated, skipped, seen };
 }
 
 function alegraStatus(inv) {
@@ -241,4 +315,4 @@ router.get('/status', (req, res) => res.json(syncStatus.get()));
 module.exports = router;
 module.exports.syncStripe = syncStripe;
 module.exports.syncAlegra = syncAlegra;
-module.exports._test = { alegraStatus, stripeStatus, alignExisting };
+module.exports._test = { alegraStatus, stripeStatus, alignExisting, chargeStatus };

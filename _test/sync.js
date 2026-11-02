@@ -51,6 +51,7 @@ const J = (o, st = 200) => ({ ok: st < 400, status: st, json: async () => o });
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   if (u.includes('api.alegra.com')) { const start = +new URL(u).searchParams.get('start'); const all = mkAlegra(); return J(all.slice(start, start + 30)); }
+  if (u.includes('api.stripe.com/v1/charges')) return J({ data: [], has_more: false });
   if (u.includes('api.stripe.com')) { const all = mkStripe(); return J({ data: all, has_more: false }); }
   if (u.includes('login_check')) return J({ token: 'tok' });
   if (u.includes('/api/documentos')) { const off = +new URL(u).searchParams.get('offset'); return J(mkFm().slice(off, off + 100)); }
