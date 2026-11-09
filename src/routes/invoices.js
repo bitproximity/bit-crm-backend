@@ -8,6 +8,7 @@ const { logAudit } = require('../utils/audit');
 const { buildConverter, round2 } = require('../utils/currency');
 const { escapeLike } = require('../utils/escape');
 const { buildReminder } = require('../utils/overdueReminder');
+const { withDefaultDueDate } = require('../utils/invoiceTerms');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -212,7 +213,7 @@ router.post('/', async (req, res) => {
   const subtotal = line_items.reduce((sum, li) => sum + Number(li.quantity || 1) * Number(li.unit_price || 0), 0);
   const total = subtotal + Number(tax || 0);
 
-  const { data: invoice, error } = await insertInvoiceTolerant({ ...invoiceFields, subtotal, tax, total, created_by: req.teamMember.id });
+  const { data: invoice, error } = await insertInvoiceTolerant(withDefaultDueDate({ ...invoiceFields, subtotal, tax, total, created_by: req.teamMember.id }));
 
   if (error) return res.status(400).json({ error: error.message });
 

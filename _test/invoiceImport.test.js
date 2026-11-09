@@ -82,7 +82,7 @@ const srv = app.listen(0, async () => {
   ok(r.status === 201 && r.body.creadas === 4 && r.body.omitidas === 0 && r.body.total === 81 + 27 + 162 + 81, `crea 4 facturas por USD 351 (${JSON.stringify(r.body)})`);
   ok(DB.invoices.length === 4 && DB.invoice_line_items.length === 4, '4 facturas con su línea cada una');
   const tuco = DB.invoices.find((i) => i.invoice_number === '100036');
-  ok(tuco.source_account === 'Bithub SRL' && tuco.status === 'pendiente' && tuco.paid_amount === 0 && tuco.due_date === null && tuco.issue_date === '2026-09-02' && tuco.currency === 'USD', 'origen Bithub SRL, pendiente, sin vencimiento de pago, fecha y moneda correctas');
+  ok(tuco.source_account === 'Bithub SRL' && tuco.status === 'pendiente' && tuco.paid_amount === 0 && tuco.due_date === '2026-10-02' && tuco.issue_date === '2026-09-02' && tuco.currency === 'USD', 'origen Bithub SRL, pendiente, vence a los 30 días de emitida (regla de cobranza), fecha y moneda correctas');
   ok(/^Carga desde PDF · NCF B0100000036/.test(tuco.notes), 'la nota lleva el marcador «Carga desde PDF» y el NCF (igual que las cargadas con SQL)');
   const n39 = DB.invoices.find((i) => i.invoice_number === '100039').notes;
   ok(n39.includes('Revisar:') && n39.includes('un cero de más') && !n39.includes('viejo que ya no aplica'), 'el aviso propio del lector queda en la nota como «Revisar:»; un aviso viejo que se puede recalcular NO se arrastra');

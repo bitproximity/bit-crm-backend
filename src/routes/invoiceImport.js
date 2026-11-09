@@ -6,6 +6,7 @@
 // Idempotente: una factura con el mismo origen + número + cliente que ya existe se omite, nunca se duplica.
 const express = require('express');
 const supabase = require('../config/supabase');
+const { withDefaultDueDate } = require('../utils/invoiceTerms');
 const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { logAudit } = require('../utils/audit');
@@ -199,7 +200,7 @@ router.post('/commit', async (req, res) => {
     });
   }
 
-  const { data: creadas, error } = await supabase.from('invoices').insert(invoiceRows).select('id, invoice_number, client_name');
+  const { data: creadas, error } = await supabase.from('invoices').insert(invoiceRows.map(withDefaultDueDate)).select('id, invoice_number, client_name');
   if (error) return res.status(400).json({ error: `No se pudieron crear las facturas: ${error.message}. No se creó ninguna.` });
 
   const porClave = new Map(aImportar.map((r) => [key(r.numero, r.cliente), r]));
