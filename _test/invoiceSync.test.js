@@ -11,7 +11,7 @@ const fake = createFakeDb({
     { id: 'e6', external_source: 'alegra:1', external_id: '6', invoice_number: 'BIT6', status: 'parcial', paid_amount: 100, total: 300, due_date: '2026-08-20', currency: 'COP' }, // anulada en Alegra pero con un cobro registrado en el CRM
     { id: 's1', external_source: 'stripe', external_id: 'in_1', invoice_number: 'ST-1', status: 'pendiente', paid_amount: 0, total: 84, due_date: '2026-10-29', currency: 'USD' },
   ],
-  invoice_payments: [], team_members: [], deals: [], companies: [], exchange_rates: [],
+  invoice_payments: [], team_members: [], deals: [], companies: [], exchange_rates: [], invoice_line_items: [],
 });
 const restore = install(fake);
 process.env.ALEGRA_EMAIL = 'a@b.c'; process.env.ALEGRA_TOKEN = 't'; process.env.ALEGRA_ACCOUNT_NAME = 'BitProximity LLC'; process.env.STRIPE_SECRET_KEY = 'sk_test';
@@ -22,14 +22,14 @@ const { memo, size } = require('../src/utils/memo');
 
 const alg = (id, o) => ({ id, numberTemplate: { fullNumber: `BIT${id}` }, subtotal: o.total, tax: 0, date: '2026-09-01', client: { name: `Cliente ${id}` }, ...o });
 const ALEGRA = [
-  alg(1, { total: 1000, totalPaid: 400, status: 'open', dueDate: '2026-10-09' }),
+  alg(1, { total: 1000, totalPaid: 400, status: 'open', dueDate: '2026-10-09', items: [{ name: 'Bit WiFi', description: 'Plan mensual', price: 600, quantity: 1 }, { name: 'Bit Music', price: 200, quantity: 2 }] }),
   alg(2, { total: 500, totalPaid: 0, status: 'open', dueDate: '2026-09-01' }),
   alg(3, { total: 300, totalPaid: 300, status: 'closed', dueDate: '2026-10-25', date: '2026-10-20', currency: { code: 'USD' } }),
   alg(4, { total: 700, totalPaid: 700, status: 'closed', dueDate: '2026-08-01' }),
   alg(5, { total: 800, totalPaid: 0, status: 'void', dueDate: '2026-08-15' }),
   alg(6, { total: 300, totalPaid: 0, status: 'void', dueDate: '2026-08-20' }),
 ];
-const STRIPE = [{ id: 'in_1', number: 'ST-1', status: 'paid', customer_name: 'Ensaladas', customer_email: 'x@y.z', currency: 'usd', subtotal: 8400, total: 8400, amount_paid: 8400, created: 1792000000, due_date: 1793000000 }];
+const STRIPE = [{ id: 'in_1', number: 'ST-1', status: 'paid', customer_name: 'Ensaladas', customer_email: 'x@y.z', currency: 'usd', subtotal: 8400, total: 8400, amount_paid: 8400, created: 1792000000, due_date: 1793000000, lines: { data: [{ description: 'Bit Signage × 2 pantallas', amount: 8400, quantity: 2 }] } }];
 // Cobros: uno de factura (se ignora), uno suelto de Payment Link, uno suelto reembolsado y uno fallido
 let CHARGES = [
   { object: 'charge', id: 'ch_inv1', invoice: 'in_1', status: 'succeeded', paid: true, amount: 8400, amount_captured: 8400, amount_refunded: 0, currency: 'usd', created: 1792000000 },
@@ -72,7 +72,10 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
   ok(size() === 0, 'la caché de corta vida se vació: el Dashboard y las métricas ven el cambio al instante');
 
   // ── repetir no cambia nada ──
+  const l1 = fake.db.invoice_line_items.filter((l) => l.invoice_id === 'e1');
+  ok(l1.length === 2 && l1[0].description === 'Bit WiFi — Plan mensual' && l1[0].unit_price === 600 && l1[1].quantity === 2, 'Alegra: la factura ya existente recibe su detalle de productos (nombre, cantidad, precio)');
   r = await sync.syncAlegra('u-admin');
+  ok(fake.db.invoice_line_items.filter((l) => l.invoice_id === 'e1').length === 2, 'repetir no duplica el detalle');
   ok(r.created === 0 && r.updated === 0 && r.skipped === 6 && fake.db.invoice_payments.length === 1 && fake.db.invoices.length === 7, 'repetir la corrida no crea ni cambia nada (ni duplica pagos)');
   ok(r.discrepancies.length === 1, 'la diferencia de BIT6 se sigue informando mientras exista');
 
@@ -85,6 +88,10 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
   ok(ref && ref.status === 'cancelada' && ref.paid_amount === 0, 'un cobro suelto reembolsado completo queda cancelado, sin monto cobrado');
   ok(!fake.db.invoices.some((i) => i.external_id === 'ch_inv1' || i.external_id === 'ch_failed1'), 'no se duplica el cobro de una factura ni se importa un cobro fallido');
   ok(Array.isArray(r.failed) && r.failed.length === 0, 'sin rechazos: la lista de fallidos viene vacía');
+  const ls1 = fake.db.invoice_line_items.filter((l) => l.invoice_id === 's1');
+  ok(ls1.length === 1 && ls1[0].quantity === 2 && ls1[0].unit_price === 42 && ls1[0].description.includes('Signage'), 'Stripe: la factura recibe su línea (Bit Signage, 2 × USD 42)');
+  const chInv = fake.db.invoices.find((i) => i.external_id === 'ch_link01');
+  ok(fake.db.invoice_line_items.some((l) => l.invoice_id === chInv.id && l.description === 'Bit Music anual' && l.unit_price === 150), 'Stripe: el cobro sin factura también guarda su detalle (descripción del cobro)');
   r = await sync.syncStripe('u-admin'); ok(r.created === 0 && r.updated === 0 && r.skipped === 3, 'Stripe repetido: sin cambios (1 factura + 2 cobros sueltos)');
   // reembolso posterior de un cobro ya importado → se actualiza
   CHARGES = CHARGES.map((c) => (c.id === 'ch_link01' ? { ...c, amount_refunded: 5000 } : c));

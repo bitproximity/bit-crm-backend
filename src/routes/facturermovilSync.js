@@ -4,7 +4,8 @@ const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { canonicalAccountName } = require('../utils/accountNames');
-const { knownExternalIds } = require('../utils/knownExternalIds');
+const { knownExternalInvoices } = require('../utils/knownExternalIds');
+const lineUtils = require('../utils/invoiceLines');
 
 router.use(requireAuth);
 router.use(require('../middleware/pagePermissions').requirePage('facturacion'));
@@ -64,7 +65,8 @@ async function syncFacturermovil(actorId) {
   const accounts = facturermovilAccountsFromEnv();
   if (accounts.length === 0) return { error: 'Falta configurar FACTUREROMOVIL_USERNAME_1 / FACTUREROMOVIL_PASSWORD_1 / FACTUREROMOVIL_NAME_1 en Railway.' };
 
-  let totalCreated = 0, totalSkipped = 0, totalSeen = 0;
+  let totalCreated = 0, totalSkipped = 0, totalSeen = 0, linesSaved = 0;
+  let withLines = null, docKeys = null;
   const perAccount = [];
 
   for (const account of accounts) {
@@ -92,16 +94,21 @@ async function syncFacturermovil(actorId) {
 
     const sourceKey = `facturero_movil:${account.index}`;
     let created = 0, skipped = 0, fuera_de_rango = 0;
-    const known = await knownExternalIds(sourceKey); // una consulta por cuenta, en vez de una por documento
+    const known = await knownExternalInvoices(sourceKey); // una consulta por cuenta, en vez de una por documento
+    if (!withLines) withLines = await lineUtils.invoicesWithLines();
+    if (docs[0] && !docKeys) docKeys = Object.keys(docs[0]); // para saber qué campos trae la API (detalle de productos)
     for (const doc of docs) {
       if (doc.codigoSri !== '01') continue; // solo facturas — no notas de crédito/débito/retenciones
       const issueDate = (doc.fechaEmision || '').slice(0, 10); // "2021-06-07T00:00:00-05:00" -> "2021-06-07"
       const year = Number(issueDate.slice(0, 4));
       if (!year || year < MIN_YEAR) { fuera_de_rango++; continue; }
 
-      if (known.has(String(doc.id))) { skipped++; continue; }
+      if (known.has(String(doc.id))) {
+        linesSaved += await lineUtils.saveLinesOnce(known.get(String(doc.id)).id, lineUtils.factureroLines(doc), withLines);
+        skipped++; continue;
+      }
 
-      const { error } = await insertInvoiceTolerant({
+      const { data: createdInv, error } = await insertInvoiceTolerant({
         invoice_number: doc.numeroDocumento,
         currency: 'USD',
         subtotal: Number(doc.valor || 0),
@@ -118,7 +125,10 @@ async function syncFacturermovil(actorId) {
         external_id: String(doc.id),
         created_by: actorId,
       });
-      if (!error) { created++; known.add(String(doc.id)); }
+      if (!error) {
+        created++; known.set(String(doc.id), { id: createdInv?.id || null });
+        linesSaved += await lineUtils.saveLinesOnce(createdInv?.id, lineUtils.factureroLines(doc), withLines);
+      }
     }
 
     perAccount.push({ account: account.name, created, skipped, fuera_de_rango, total_en_cuenta: docs.length });
@@ -128,7 +138,7 @@ async function syncFacturermovil(actorId) {
   }
 
   if (actorId) await logAudit('invoice_sync', null, 'facturero_movil_sync', actorId, { created: totalCreated, skipped: totalSkipped, per_account: perAccount });
-  return { created: totalCreated, skipped: totalSkipped, total_visto: totalSeen, per_account: perAccount };
+  return { created: totalCreated, skipped: totalSkipped, total_visto: totalSeen, lines_saved: linesSaved, campos_documento: docKeys, per_account: perAccount };
 }
 
 router.post('/facturero-movil', requireRole('admin'), async (req, res) => {

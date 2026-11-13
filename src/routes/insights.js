@@ -27,6 +27,26 @@ router.use(async (req, res, next) => {
   next();
 });
 
+// GET /api/insights/revenue-breakdown — lo COBRADO (facturas) por producto y por país, en USD.
+// Solo para quien puede ver Facturación (son montos cobrados reales).
+router.get('/revenue-breakdown', requirePage('facturacion'), async (req, res) => {
+  const { buildRevenueBreakdown } = require('../utils/revenueBreakdown');
+  const { buildConverter } = require('../utils/currency');
+  const [inv, lines, prods, comps, rates] = await Promise.all([
+    fetchAll(supabase.from('invoices').select('id, status, paid_amount, currency, company_id, source_account').gt('paid_amount', 0)),
+    fetchAll(supabase.from('invoice_line_items').select('invoice_id, product_id, description, quantity, unit_price')),
+    supabase.from('products').select('id, name'),
+    fetchAll(supabase.from('companies').select('id, country').not('country', 'is', null)),
+    supabase.from('exchange_rates').select('*'),
+  ]);
+  const err = inv.error || lines.error || prods.error || comps.error || rates.error;
+  if (err) return res.status(500).json({ error: err.message });
+  const companiesById = new Map((comps.data || []).map((c) => [c.id, c]));
+  res.json(buildRevenueBreakdown({
+    invoices: inv.data, lines: lines.data, products: prods.data, companiesById, converter: buildConverter(rates.data),
+  }));
+});
+
 // GET /api/insights/funnel?pipeline_id=
 // Para cada etapa: cuántos deals llegaron a esa etapa o más adelante
 // (incluye ganados/perdidos según en qué etapa quedaron), sobre el total.

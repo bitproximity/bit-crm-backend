@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { dateInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
+const lineUtils = require('../utils/invoiceLines');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { knownExternalInvoices } = require('../utils/knownExternalIds');
 const { mergeIncoming } = require('../utils/invoiceMerge');
@@ -90,10 +91,13 @@ async function syncStripe(actorId) {
   const discrepancies = [];
   const failed = []; // facturas que la base rechazó — antes se descartaban sin avisar
   const known = await knownExternalInvoices('stripe'); // una consulta, en vez de una por factura
+  const withLines = await lineUtils.invoicesWithLines();
+  let linesSaved = 0;
   for (const inv of allInvoices) {
     if (inv.status === 'draft') continue;
     const existing = known.get(String(inv.id));
     if (existing) {
+      linesSaved += await lineUtils.saveLinesOnce(existing.id, lineUtils.stripeInvoiceLines(inv), withLines);
       const r = await alignExisting(existing, {
         status: stripeStatus(inv), paid_amount: Math.round(inv.amount_paid / 100 * 100) / 100, total: Math.round(inv.total / 100 * 100) / 100,
         subtotal: Math.round(inv.subtotal / 100 * 100) / 100, tax: Math.round((inv.total - inv.subtotal) / 100 * 100) / 100,
@@ -106,7 +110,7 @@ async function syncStripe(actorId) {
 
     const name = inv.customer_name || 'Sin nombre';
     const email = inv.customer_email || 'sin email';
-    const { error } = await insertInvoiceTolerant({
+    const { data: createdInv, error } = await insertInvoiceTolerant({
       invoice_number: inv.number,
       currency: inv.currency.toUpperCase(),
       subtotal: Math.round(inv.subtotal / 100 * 100) / 100,
@@ -123,19 +127,22 @@ async function syncStripe(actorId) {
       external_id: inv.id,
       created_by: actorId,
     });
-    if (!error) { created++; known.set(String(inv.id), { id: null }); }
-    else failed.push({ id: inv.id, number: inv.number, client: name, error: error.message });
+    if (!error) {
+      created++; known.set(String(inv.id), { id: createdInv?.id || null });
+      linesSaved += await lineUtils.saveLinesOnce(createdInv?.id, lineUtils.stripeInvoiceLines(inv), withLines);
+    } else failed.push({ id: inv.id, number: inv.number, client: name, error: error.message });
   }
 
   // 2) Cobros SIN factura (Payment Links / Checkout): Stripe no les crea factura, así que nunca
   // llegaban. Se importan como factura pagada del CRM con su id de cobro (ch_…) para no duplicar.
-  const charges = await syncStripeCharges({ key, accountName, known, actorId, failed });
+  const charges = await syncStripeCharges({ key, accountName, known, actorId, failed, withLines });
+  linesSaved += charges.linesSaved || 0;
   if (charges.error) return { error: `Cobros sin factura: ${charges.error}`, created, updated, skipped, failed, discrepancies };
   created += charges.created; updated += charges.updated; skipped += charges.skipped;
 
   if (actorId) await logAudit('invoice_sync', null, 'stripe_sync', actorId, { created, updated, skipped, failed: failed.length, charges_created: charges.created });
   if (created || updated) clearMemo();
-  return { created, updated, skipped, failed, discrepancies, total_en_stripe: allInvoices.length + charges.seen };
+  return { created, updated, skipped, failed, discrepancies, lines_saved: linesSaved, total_en_stripe: allInvoices.length + charges.seen };
 }
 
 // Estado de un cobro suelto: reembolsado total → cancelada; parcial → parcial; resto → pagada.
@@ -146,7 +153,8 @@ function chargeStatus(ch) {
   return 'pagada';
 }
 
-async function syncStripeCharges({ key, accountName, known, actorId, failed }) {
+async function syncStripeCharges({ key, accountName, known, actorId, failed, withLines }) {
+  let linesSaved = 0;
   let all = [];
   let startingAfter;
   for (let page = 0; page < 10; page++) {
@@ -174,6 +182,7 @@ async function syncStripeCharges({ key, accountName, known, actorId, failed }) {
     const paid = Math.max(0, Math.round((amount - refunded) * 100) / 100);
     const existing = known.get(String(ch.id));
     if (existing) {
+      if (withLines) linesSaved += await lineUtils.saveLinesOnce(existing.id, lineUtils.stripeChargeLines(ch), withLines);
       const r = await alignExisting(existing, { status: chargeStatus(ch), paid_amount: paid, total: amount, subtotal: amount, tax: 0 }, actorId, 'Stripe');
       if (r.updated) updated++; else skipped++;
       continue;
@@ -181,7 +190,7 @@ async function syncStripeCharges({ key, accountName, known, actorId, failed }) {
     const name = ch.billing_details?.name || ch.customer_name || null;
     const email = ch.billing_details?.email || ch.receipt_email || null;
     const day = dateInTz(new Date(ch.created * 1000));
-    const { error } = await insertInvoiceTolerant({
+    const { data: createdCh, error } = await insertInvoiceTolerant({
       invoice_number: ch.receipt_number || `CH-${String(ch.id).slice(-8).toUpperCase()}`,
       currency: String(ch.currency || 'usd').toUpperCase(),
       subtotal: amount,
@@ -198,10 +207,12 @@ async function syncStripeCharges({ key, accountName, known, actorId, failed }) {
       external_id: ch.id,
       created_by: actorId,
     });
-    if (!error) { created++; known.set(String(ch.id), { id: null }); }
-    else failed.push({ id: ch.id, number: ch.receipt_number || ch.id, client: name || email, error: error.message });
+    if (!error) {
+      created++; known.set(String(ch.id), { id: createdCh?.id || null });
+      if (withLines) linesSaved += await lineUtils.saveLinesOnce(createdCh?.id, lineUtils.stripeChargeLines(ch), withLines);
+    } else failed.push({ id: ch.id, number: ch.receipt_number || ch.id, client: name || email, error: error.message });
   }
-  return { created, updated, skipped, seen };
+  return { created, updated, skipped, seen, linesSaved };
 }
 
 function alegraStatus(inv) {
@@ -231,9 +242,10 @@ async function syncAlegra(actorId) {
   const accounts = alegraAccountsFromEnv();
   if (accounts.length === 0) return { error: 'Falta ALEGRA_EMAIL / ALEGRA_TOKEN en las variables de entorno de Railway.' };
 
-  let totalCreated = 0, totalUpdated = 0, totalSkipped = 0, totalSeen = 0;
+  let totalCreated = 0, totalUpdated = 0, totalSkipped = 0, totalSeen = 0, linesSaved = 0;
   const perAccount = [];
   const allDiscrepancies = [];
+  const withLines = await lineUtils.invoicesWithLines();
 
   for (const account of accounts) {
     const auth = 'Basic ' + Buffer.from(`${account.email}:${account.token}`).toString('base64');
@@ -252,6 +264,7 @@ async function syncAlegra(actorId) {
     for (const inv of all) {
       const existing = known.get(String(inv.id));
       if (existing) {
+        linesSaved += await lineUtils.saveLinesOnce(existing.id, lineUtils.alegraLines(inv), withLines);
         const r = await alignExisting(existing, {
           status: alegraStatus(inv), paid_amount: Number(inv.totalPaid || 0), total: Number(inv.total || 0),
           subtotal: Number(inv.subtotal || 0), tax: Number(inv.tax || 0), due_date: inv.dueDate || inv.date,
@@ -263,7 +276,7 @@ async function syncAlegra(actorId) {
 
       const invoiceNumber = inv.numberTemplate?.fullNumber || inv.numberTemplate?.formattedNumber || String(inv.id);
       const origin = alegraOriginFor(invoiceNumber, account.name); // "B2…" → Mario Colombia
-      const { error } = await insertInvoiceTolerant({
+      const { data: createdInv, error } = await insertInvoiceTolerant({
         invoice_number: invoiceNumber,
         currency: String(inv.currency?.code || 'COP').toUpperCase(),
         subtotal: Number(inv.subtotal || 0),
@@ -280,7 +293,10 @@ async function syncAlegra(actorId) {
         external_id: String(inv.id),
         created_by: actorId,
       });
-      if (!error) { created++; known.set(String(inv.id), { id: null }); }
+      if (!error) {
+        created++; known.set(String(inv.id), { id: createdInv?.id || null });
+        linesSaved += await lineUtils.saveLinesOnce(createdInv?.id, lineUtils.alegraLines(inv), withLines);
+      }
     }
 
     perAccount.push({ account: account.name, created, updated, skipped, total_en_alegra: all.length });
@@ -292,7 +308,7 @@ async function syncAlegra(actorId) {
 
   if (actorId) await logAudit('invoice_sync', null, 'alegra_sync', actorId, { created: totalCreated, updated: totalUpdated, skipped: totalSkipped, per_account: perAccount });
   if (totalCreated || totalUpdated) clearMemo();
-  return { created: totalCreated, updated: totalUpdated, skipped: totalSkipped, discrepancies: allDiscrepancies, total_en_alegra: totalSeen, per_account: perAccount };
+  return { created: totalCreated, updated: totalUpdated, skipped: totalSkipped, discrepancies: allDiscrepancies, lines_saved: linesSaved, total_en_alegra: totalSeen, per_account: perAccount };
 }
 
 router.post('/stripe', requireRole('admin'), async (req, res) => {
