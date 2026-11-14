@@ -66,7 +66,8 @@ async function syncFacturermovil(actorId) {
   if (accounts.length === 0) return { error: 'Falta configurar FACTUREROMOVIL_USERNAME_1 / FACTUREROMOVIL_PASSWORD_1 / FACTUREROMOVIL_NAME_1 en Railway.' };
 
   let totalCreated = 0, totalSkipped = 0, totalSeen = 0, linesSaved = 0;
-  let withLines = null, docKeys = null;
+  let withLines = null, docKeys = null, detailKeys = null, detailStatus = null, detailFetches = 0;
+  const DETAIL_PER_RUN = 60;
   const perAccount = [];
 
   for (const account of accounts) {
@@ -104,7 +105,24 @@ async function syncFacturermovil(actorId) {
       if (!year || year < MIN_YEAR) { fuera_de_rango++; continue; }
 
       if (known.has(String(doc.id))) {
-        linesSaved += await lineUtils.saveLinesOnce(known.get(String(doc.id)).id, lineUtils.factureroLines(doc), withLines);
+        const invId = known.get(String(doc.id)).id;
+        let lines = lineUtils.factureroLines(doc);
+        // El listado no trae el detalle: se pide el documento uno por uno, de a pocos por corrida
+        // (cada 15 min) para no saturar la API, hasta completar todas las facturas.
+        if (!lines.length && invId && !withLines.has(invId) && detailFetches < DETAIL_PER_RUN) {
+          detailFetches++;
+          try {
+            const r = await fetch(`${BASE_URL}/api/documentos/${doc.id}`, { headers: { Authorization: `Bearer ${token}` } });
+            detailStatus = r.status;
+            const full = r.ok ? await r.json().catch(() => null) : null;
+            const detail = Array.isArray(full) ? full[0] : full;
+            if (detail && !detailKeys) detailKeys = Object.keys(detail);
+            if (detail) lines = lineUtils.factureroLines(detail);
+          } catch (err) {
+            detailStatus = `error: ${err.message}`;
+          }
+        }
+        linesSaved += await lineUtils.saveLinesOnce(invId, lines, withLines);
         skipped++; continue;
       }
 
@@ -138,7 +156,8 @@ async function syncFacturermovil(actorId) {
   }
 
   if (actorId) await logAudit('invoice_sync', null, 'facturero_movil_sync', actorId, { created: totalCreated, skipped: totalSkipped, per_account: perAccount });
-  return { created: totalCreated, skipped: totalSkipped, total_visto: totalSeen, lines_saved: linesSaved, campos_documento: docKeys, per_account: perAccount };
+  return { created: totalCreated, skipped: totalSkipped, total_visto: totalSeen, lines_saved: linesSaved, per_account: perAccount,
+    diagnostic: { lines_saved: linesSaved, detail_fetches: detailFetches, detail_status: detailStatus, campos_documento: docKeys, campos_detalle: detailKeys } };
 }
 
 router.post('/facturero-movil', requireRole('admin'), async (req, res) => {

@@ -14,11 +14,22 @@ const ACCOUNT_COUNTRY = {
 
 const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
+// Un mismo producto aparece con varios nombres (catálogo, Alegra, Stripe): se agrupan.
+function canonicalProduct(name) {
+  const t = norm(name);
+  if (/prospec|reuniones|citas|appointment/.test(t)) return 'Bit Prospect';
+  if (/neomedia|cartel/.test(t)) return 'Cartelería Digital (Neomedia)';
+  if (/wi-?fi|portal cautivo|hotspot/.test(t)) return 'Bit WiFi';
+  if (/music|musica|radio/.test(t)) return 'Bit Music';
+  if (/signage/.test(t)) return 'Bit Signage';
+  return name;
+}
+
 function productFromText(text, catalogNames) {
   const t = norm(text);
   if (!t) return null;
   const hit = catalogNames.find((n) => n.key && t.includes(n.key));
-  if (hit) return hit.name;
+  if (hit) return canonicalProduct(hit.name);
   if (/whatsapp/.test(t)) return 'WhatsApp Marketing';
   if (/e-?mail|mailing/.test(t)) return 'Email Marketing';
   if (/wi-?fi|wi fi|hotspot|internet/.test(t)) return 'Bit WiFi';
@@ -26,6 +37,7 @@ function productFromText(text, catalogNames) {
   if (/signage|cartel|pantalla|screen/.test(t)) return 'Bit Signage';
   if (/prospec|reunion|citas|appointment|lead/.test(t)) return 'Bit Prospect';
   if (/router|equipo|access point|hardware|antena/.test(t)) return 'Equipos (hardware)';
+  if (/comision|servicios? profesional|consultor|asesor/.test(t)) return 'Comisiones y servicios profesionales';
   return null;
 }
 
@@ -45,6 +57,7 @@ function buildRevenueBreakdown({ invoices, lines, products, companiesById, conve
   const byCountry = new Map();
   const byCountryProduct = new Map();
   let total = 0, withDetail = 0;
+  const unclassified = new Map(); // descripciones que no se pudieron clasificar (para ir mejorando)
   const add = (map, key, usd) => map.set(key, (map.get(key) || 0) + usd);
 
   for (const inv of invoices || []) {
@@ -64,7 +77,12 @@ function buildRevenueBreakdown({ invoices, lines, products, companiesById, conve
     ls.forEach((l, i) => {
       const share = sum > 0 ? amounts[i] / sum : 1 / ls.length;
       const usd = paid * share;
-      const product = (l.product_id && productById.get(l.product_id)) || productFromText(l.description, catalogNames) || 'Otros servicios';
+      const fromCatalog = l.product_id && productById.get(l.product_id);
+      const product = (fromCatalog && canonicalProduct(fromCatalog)) || productFromText(l.description, catalogNames) || 'Otros servicios';
+      if (product === 'Otros servicios') {
+        const k = String(l.description || '(sin descripción)').trim().slice(0, 60);
+        unclassified.set(k, (unclassified.get(k) || 0) + usd);
+      }
       add(byProduct, product, usd);
       add(byCountryProduct, `${country}|${product}`, usd);
     });
@@ -81,6 +99,7 @@ function buildRevenueBreakdown({ invoices, lines, products, companiesById, conve
     total_usd: r2(total),
     detail_coverage_pct: total ? Math.round((withDetail / total) * 1000) / 10 : 0,
     by_product: toRows(byProduct),
+    unclassified_top: [...unclassified.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([description, usd]) => ({ description, usd: r2(usd) })),
     by_country: toRows(byCountry).map((c) => ({ ...c, top_products: (topByCountry[c.name] || []).sort((a, b) => b.usd - a.usd).slice(0, 3) })),
   };
 }

@@ -38,5 +38,11 @@ const { buildRevenueBreakdown } = require('../src/utils/revenueBreakdown');
   ok(c.Ecuador === 100 && c.Colombia === 100 && c.Guatemala === 50 && !('X' in c), 'cobrado por país: empresa vinculada primero, si no la empresa que facturó; anuladas fuera');
   ok(rb.detail_coverage_pct === 80, 'cobertura: % de lo cobrado que tiene detalle de productos');
 }
+{
+  const { productFromText } = require('../src/utils/revenueBreakdown');
+  const cat = [{ name: 'Servicio de prospección', key: 'servicio de prospeccion' }];
+  ok(productFromText('Servicios profesionales — Servicio de prospección mes de agosto', cat) === 'Bit Prospect', '«Servicio de prospección» del catálogo se agrupa como Bit Prospect');
+  ok(productFromText('Fee mensual Social WiFi — Portal Cautivo (42 aps)', []) === 'Bit WiFi' && productFromText('Comisiones', []) === 'Comisiones y servicios profesionales', 'Social WiFi → Bit WiFi; Comisiones → servicios profesionales');
+}
 console.log(`\n${pass} ok · ${fail} fallan`);
 process.exit(fail ? 1 : 0);
