@@ -44,5 +44,14 @@ const { buildRevenueBreakdown } = require('../src/utils/revenueBreakdown');
   ok(productFromText('Servicios profesionales — Servicio de prospección mes de agosto', cat) === 'Bit Prospect', '«Servicio de prospección» del catálogo se agrupa como Bit Prospect');
   ok(productFromText('Fee mensual Social WiFi — Portal Cautivo (42 aps)', []) === 'Bit WiFi' && productFromText('Comisiones', []) === 'Comisiones y servicios profesionales', 'Social WiFi → Bit WiFi; Comisiones → servicios profesionales');
 }
+{
+  const { sriXmlLines } = require('../src/utils/invoiceLines');
+  const fac = '<factura><detalles><detalle><codigoPrincipal>WF01</codigoPrincipal><descripcion>Servicio Bit WiFi mensual</descripcion><cantidad>2.000000</cantidad><precioUnitario>50.00</precioUnitario><descuento>10.00</descuento><precioTotalSinImpuesto>90.00</precioTotalSinImpuesto></detalle><detalle><descripcion>Bit Music</descripcion><cantidad>1</cantidad><precioUnitario>25</precioUnitario><precioTotalSinImpuesto>25</precioTotalSinImpuesto></detalle></detalles></factura>';
+  const a = sriXmlLines(fac);
+  ok(a.length === 2 && a[0].description === 'Servicio Bit WiFi mensual' && a[0].quantity === 2 && a[0].unit_price === 45 && a[1].unit_price === 25, 'XML del SRI: lee descripción, cantidad y precio neto por línea');
+  const wrapped = '<autorizacion><estado>AUTORIZADO</estado><comprobante><![CDATA[' + fac + ']]></comprobante></autorizacion>';
+  const escaped = '<autorizacion><comprobante>' + fac.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</comprobante></autorizacion>';
+  ok(sriXmlLines(wrapped).length === 2 && sriXmlLines(escaped).length === 2 && sriXmlLines(Buffer.from(fac).toString('base64')).length === 2, 'XML del SRI envuelto en CDATA, escapado o en base64');
+}
 console.log(`\n${pass} ok · ${fail} fallan`);
 process.exit(fail ? 1 : 0);

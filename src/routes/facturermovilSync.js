@@ -66,7 +66,7 @@ async function syncFacturermovil(actorId) {
   if (accounts.length === 0) return { error: 'Falta configurar FACTUREROMOVIL_USERNAME_1 / FACTUREROMOVIL_PASSWORD_1 / FACTUREROMOVIL_NAME_1 en Railway.' };
 
   let totalCreated = 0, totalSkipped = 0, totalSeen = 0, linesSaved = 0;
-  let withLines = null, docKeys = null, detailKeys = null, detailStatus = null, detailFetches = 0;
+  let withLines = null, docKeys = null, detailKeys = null, detailStatus = null, detailFetches = 0, xmlKind = null;
   const DETAIL_PER_RUN = 60;
   const perAccount = [];
 
@@ -118,6 +118,18 @@ async function syncFacturermovil(actorId) {
             const detail = Array.isArray(full) ? full[0] : full;
             if (detail && !detailKeys) detailKeys = Object.keys(detail);
             if (detail) lines = lineUtils.factureroLines(detail);
+            // El detalle viene dentro del XML del SRI (texto, base64 o un enlace al archivo)
+            if (detail && !lines.length && detail.xml) {
+              let xml = detail.xml;
+              if (typeof xml === 'string' && /^https?:\/\//.test(xml.trim())) {
+                const rx = await fetch(xml.trim(), { headers: { Authorization: `Bearer ${token}` } });
+                xml = rx.ok ? await rx.text() : '';
+                xmlKind = `url (${rx.status})`;
+              } else if (!xmlKind) {
+                xmlKind = typeof xml === 'string' ? (xml.trim().startsWith('<') ? 'texto xml' : 'otro texto') : typeof xml;
+              }
+              if (typeof xml === 'string') lines = lineUtils.sriXmlLines(xml);
+            }
           } catch (err) {
             detailStatus = `error: ${err.message}`;
           }
@@ -157,7 +169,7 @@ async function syncFacturermovil(actorId) {
 
   if (actorId) await logAudit('invoice_sync', null, 'facturero_movil_sync', actorId, { created: totalCreated, skipped: totalSkipped, per_account: perAccount });
   return { created: totalCreated, skipped: totalSkipped, total_visto: totalSeen, lines_saved: linesSaved, per_account: perAccount,
-    diagnostic: { lines_saved: linesSaved, detail_fetches: detailFetches, detail_status: detailStatus, campos_documento: docKeys, campos_detalle: detailKeys } };
+    diagnostic: { lines_saved: linesSaved, detail_fetches: detailFetches, detail_status: detailStatus, campos_documento: docKeys, campos_detalle: detailKeys, xml: xmlKind } };
 }
 
 router.post('/facturero-movil', requireRole('admin'), async (req, res) => {

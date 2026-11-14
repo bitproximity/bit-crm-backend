@@ -62,4 +62,42 @@ function factureroLines(doc) {
   }));
 }
 
-module.exports = { invoicesWithLines, saveLinesOnce, stripeInvoiceLines, stripeChargeLines, alegraLines, factureroLines };
+// Factura electrónica del SRI (Ecuador): el XML trae <detalles><detalle> con descripción, cantidad y
+// precio unitario. Puede venir envuelto en <autorizacion><comprobante><![CDATA[ … ]]>, con entidades
+// escapadas (&lt;…) o en base64.
+function decodeXmlText(raw) {
+  let x = String(raw || '').trim();
+  if (x && !x.startsWith('<') && /^[A-Za-z0-9+/=\s]+$/.test(x)) {
+    try { const d = Buffer.from(x, 'base64').toString('utf8'); if (d.includes('<')) x = d; } catch { /* no era base64 */ }
+  }
+  const cdata = /<comprobante>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/comprobante>/i.exec(x);
+  if (cdata) x = cdata[1];
+  if (!/<detalle[\s>]/i.test(x) && /&lt;detalle/i.test(x)) {
+    x = x.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  }
+  return x;
+}
+
+function sriXmlLines(raw) {
+  const x = decodeXmlText(raw);
+  const tag = (block, name) => {
+    const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'i').exec(block);
+    return m ? m[1].trim() : null;
+  };
+  const out = [];
+  for (const m of x.matchAll(/<detalle>([\s\S]*?)<\/detalle>/gi)) {
+    const b = m[1];
+    const qty = Number(tag(b, 'cantidad')) || 1;
+    const sinImp = Number(tag(b, 'precioTotalSinImpuesto'));
+    const unit = Number(tag(b, 'precioUnitario'));
+    out.push({
+      description: tag(b, 'descripcion') || tag(b, 'codigoPrincipal') || null,
+      quantity: qty,
+      // precio neto real de la línea (ya con descuento) repartido por unidad
+      unit_price: Number.isFinite(sinImp) && sinImp > 0 ? sinImp / qty : (Number.isFinite(unit) ? unit : 0),
+    });
+  }
+  return out;
+}
+
+module.exports = { sriXmlLines, invoicesWithLines, saveLinesOnce, stripeInvoiceLines, stripeChargeLines, alegraLines, factureroLines };
