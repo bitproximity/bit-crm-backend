@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { dateInTz } = require('../utils/businessDate');
 const { logAudit } = require('../utils/audit');
+const { logSyncAudit } = require('../utils/syncAudit');
 const lineUtils = require('../utils/invoiceLines');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { knownExternalInvoices } = require('../utils/knownExternalIds');
@@ -140,7 +141,7 @@ async function syncStripe(actorId) {
   if (charges.error) return { error: `Cobros sin factura: ${charges.error}`, created, updated, skipped, failed, discrepancies };
   created += charges.created; updated += charges.updated; skipped += charges.skipped;
 
-  if (actorId) await logAudit('invoice_sync', null, 'stripe_sync', actorId, { created, updated, skipped, failed: failed.length, charges_created: charges.created });
+  await logSyncAudit('stripe_sync', actorId, { created, updated, skipped, failed: failed.length, charges_created: charges.created });
   if (created || updated) clearMemo();
   return { created, updated, skipped, failed, discrepancies, lines_saved: linesSaved, total_en_stripe: allInvoices.length + charges.seen };
 }
@@ -306,7 +307,7 @@ async function syncAlegra(actorId) {
     totalSeen += all.length;
   }
 
-  if (actorId) await logAudit('invoice_sync', null, 'alegra_sync', actorId, { created: totalCreated, updated: totalUpdated, skipped: totalSkipped, per_account: perAccount });
+  await logSyncAudit('alegra_sync', actorId, { created: totalCreated, updated: totalUpdated, skipped: totalSkipped, per_account: perAccount });
   if (totalCreated || totalUpdated) clearMemo();
   return { created: totalCreated, updated: totalUpdated, skipped: totalSkipped, discrepancies: allDiscrepancies, lines_saved: linesSaved, total_en_alegra: totalSeen, per_account: perAccount };
 }

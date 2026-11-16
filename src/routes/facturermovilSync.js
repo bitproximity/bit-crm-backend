@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { logAudit } = require('../utils/audit');
+const { logSyncAudit } = require('../utils/syncAudit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { canonicalAccountName } = require('../utils/accountNames');
 const { knownExternalInvoices } = require('../utils/knownExternalIds');
@@ -167,7 +168,7 @@ async function syncFacturermovil(actorId) {
     totalSeen += docs.length;
   }
 
-  if (actorId) await logAudit('invoice_sync', null, 'facturero_movil_sync', actorId, { created: totalCreated, skipped: totalSkipped, per_account: perAccount });
+  await logSyncAudit('facturero_movil_sync', actorId, { created: totalCreated, skipped: totalSkipped, per_account: perAccount });
   return { created: totalCreated, skipped: totalSkipped, total_visto: totalSeen, lines_saved: linesSaved, per_account: perAccount,
     diagnostic: { lines_saved: linesSaved, detail_fetches: detailFetches, detail_status: detailStatus, campos_documento: docKeys, campos_detalle: detailKeys, xml: xmlKind } };
 }

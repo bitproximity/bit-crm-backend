@@ -30,7 +30,9 @@ async function runOnce(label, fn) {
     } else {
       const diff = (result.discrepancies || []).length;
       console.log(`[invoice-scheduler] ${label}: +${result.created} nuevas, ${result.updated || 0} actualizadas, ${result.skipped} sin cambios${diff ? `, ${diff} diferencias con el origen` : ''}`);
-      if (result.created || result.updated) clearMemo(); // para que el Dashboard y las métricas vean el cambio al instante, no en 20 s
+      const dg = result.diagnostic;
+      if (dg && (dg.detail_fetches || dg.lines_saved)) console.log(`[invoice-scheduler] ${label}: detalle de productos — ${dg.detail_fetches || 0} documentos consultados, ${dg.lines_saved || 0} líneas guardadas`);
+      if (result.created || result.updated || (dg && dg.lines_saved)) clearMemo(); // para que el Dashboard y las métricas vean el cambio al instante, no en 20 s
     }
   } catch (err) {
     console.error(`[invoice-scheduler] ${label} falló:`, err.message);

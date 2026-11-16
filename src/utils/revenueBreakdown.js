@@ -104,4 +104,22 @@ function buildRevenueBreakdown({ invoices, lines, products, companiesById, conve
   };
 }
 
-module.exports = { buildRevenueBreakdown, productFromText, ACCOUNT_COUNTRY };
+// Carga los datos y arma el desglose (lo usan la pantalla de Métricas y el conector de Claude)
+async function loadRevenueBreakdown() {
+  const supabase = require('../config/supabase');
+  const { fetchAll } = require('./fetchAll');
+  const { buildConverter } = require('./currency');
+  const [inv, lines, prods, comps, rates] = await Promise.all([
+    fetchAll(supabase.from('invoices').select('id, status, paid_amount, currency, company_id, source_account').gt('paid_amount', 0)),
+    fetchAll(supabase.from('invoice_line_items').select('invoice_id, product_id, description, quantity, unit_price')),
+    supabase.from('products').select('id, name'),
+    fetchAll(supabase.from('companies').select('id, country').not('country', 'is', null)),
+    supabase.from('exchange_rates').select('*'),
+  ]);
+  const err = inv.error || lines.error || prods.error || comps.error || rates.error;
+  if (err) throw new Error(err.message);
+  const companiesById = new Map((comps.data || []).map((c) => [c.id, c]));
+  return buildRevenueBreakdown({ invoices: inv.data, lines: lines.data, products: prods.data, companiesById, converter: buildConverter(rates.data) });
+}
+
+module.exports = { loadRevenueBreakdown, buildRevenueBreakdown, productFromText, ACCOUNT_COUNTRY };

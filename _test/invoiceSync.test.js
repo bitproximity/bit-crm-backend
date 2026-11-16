@@ -92,7 +92,9 @@ const row = (id) => fake.db.invoices.find((i) => i.id === id);
   ok(ls1.length === 1 && ls1[0].quantity === 2 && ls1[0].unit_price === 42 && ls1[0].description.includes('Signage'), 'Stripe: la factura recibe su línea (Bit Signage, 2 × USD 42)');
   const chInv = fake.db.invoices.find((i) => i.external_id === 'ch_link01');
   ok(fake.db.invoice_line_items.some((l) => l.invoice_id === chInv.id && l.description === 'Bit Music anual' && l.unit_price === 150), 'Stripe: el cobro sin factura también guarda su detalle (descripción del cobro)');
+  const auditBefore = fake.db.audit_log.filter((a) => a.type === 'invoice_sync').length;
   r = await sync.syncStripe('u-admin'); ok(r.created === 0 && r.updated === 0 && r.skipped === 3, 'Stripe repetido: sin cambios (1 factura + 2 cobros sueltos)');
+  ok(auditBefore >= 1 && fake.db.audit_log.filter((a) => a.type === 'invoice_sync').length === auditBefore, 'una sincronización sin cambios no escribe en Actividad reciente; con cambios sí');
   // reembolso posterior de un cobro ya importado → se actualiza
   CHARGES = CHARGES.map((c) => (c.id === 'ch_link01' ? { ...c, amount_refunded: 5000 } : c));
   r = await sync.syncStripe('u-admin');

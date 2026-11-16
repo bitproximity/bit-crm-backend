@@ -659,6 +659,26 @@ function buildServer(teamMember) {
     }
   );
 
+  // ─── COBRADO POR PRODUCTO Y PAÍS ───
+  server.registerTool(
+    'bitcrm_get_revenue_breakdown',
+    {
+      title: 'Cobrado por producto y país',
+      description: 'Devuelve lo realmente cobrado (facturas, no tratos) en USD a la tasa del día, desglosado por producto y por país, con los 3 productos principales de cada país, el porcentaje de lo cobrado que tiene detalle de productos y las descripciones que no se pudieron clasificar. El país es el de la empresa vinculada a la factura o, si no hay, el de la empresa que facturó. Solo admin con acceso a Facturación.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async () => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede ver la facturación.');
+      if ((teamMember.blocked_pages || []).includes('facturacion')) return errorResult('Tu acceso a Facturación está bloqueado.');
+      try {
+        return textResult(await require('../utils/revenueBreakdown').loadRevenueBreakdown());
+      } catch (err) {
+        return errorResult(err.message);
+      }
+    }
+  );
+
   // ─── FACTURACIÓN ───
   // Lectura de facturas emitidas (Stripe, Alegra, Facturero Móvil y manuales), con montos también en USD
   // a la tasa del día. Mismas reglas que la pantalla Facturación: solo admin y respetando blocked_pages.
