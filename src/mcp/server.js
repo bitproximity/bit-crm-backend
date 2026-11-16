@@ -48,8 +48,8 @@ async function resolveOrCreateContact(name, email, phone) {
 async function resolveOrCreateCompany(name) {
   if (!name) return null;
   const clean = cleanName(name);
-  const { data: matches } = await supabase.from('companies').select('id').ilike('name', clean).order('created_at').limit(1);
-  if (matches?.[0]) return matches[0].id;
+  const existingId = await require('../utils/findCompany').findCompanyIdByName(clean);
+  if (existingId) return existingId;
   const { data: created } = await supabase.from('companies').insert({ name: clean }).select('id').single();
   return created?.id || null;
 }

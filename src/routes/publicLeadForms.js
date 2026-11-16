@@ -61,8 +61,9 @@ router.post('/:id/submit', async (req, res) => {
   try {
     let companyId = null;
     if (company) {
-      const { data: existing } = await supabase.from('companies').select('id').ilike('name', escapeIlikeValue(company)).maybeSingle();
-      if (existing) companyId = existing.id;
+      // (antes: maybeSingle() daba error si ya había 2 con ese nombre y se creaba una tercera)
+      const existingId = await require('../utils/findCompany').findCompanyIdByName(company);
+      if (existingId) companyId = existingId;
       else {
         const { data: created, error: coErr } = await supabase.from('companies').insert({ name: company }).select('id').single();
         if (coErr) throw coErr;

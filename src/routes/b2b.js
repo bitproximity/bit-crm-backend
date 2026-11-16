@@ -9,6 +9,7 @@ const { computeB2bDashboard } = require('../utils/b2bDashboard');
 const { logAudit } = require('../utils/audit');
 const { isExcludedFromBitProspect } = require('../utils/bitProspectTeam');
 const { todayInTz } = require('../utils/businessDate');
+const { findCompanyIdByName } = require('../utils/findCompany');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -34,10 +35,9 @@ async function syncRecordToContact(record, clientName, ownerId) {
   // limit(1) en vez de maybeSingle(): si ya había 2 empresas con ese nombre, maybeSingle()
   // devolvía error -> "no existe" -> creaba una TERCERA. Y se compara el nombre limpio.
   const targetName = cleanName(record.target_company);
-  const { data: matches } = await supabase.from('companies').select('id').ilike('name', targetName).order('created_at').limit(1);
-  const existingCompany = matches?.[0];
-  if (existingCompany) {
-    companyId = existingCompany.id;
+  const existingCompanyId = await findCompanyIdByName(targetName);
+  if (existingCompanyId) {
+    companyId = existingCompanyId;
   } else {
     const { data: newCompany, error: companyError } = await supabase
       .from('companies').insert({ name: targetName, country: record.country || null, industry: record.industry || null }).select('id').single();
