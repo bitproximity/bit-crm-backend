@@ -13,6 +13,20 @@ router.use(requireAuth);
 // Son cifras de facturación y cobranza: las ve quien puede ver Facturación (admin, salvo que se la bloqueen).
 router.use(requirePage('facturacion'));
 
+// POST /api/finance/weekly-digest/send — me envía ahora el resumen semanal (el automático sale los lunes 8:00)
+router.post('/weekly-digest/send', async (req, res) => {
+  try {
+    const { loadWeeklyDigest, sendDigestTo } = require('../utils/weeklyDigest');
+    if (!req.teamMember.email) return res.status(400).json({ error: 'Tu usuario no tiene correo.' });
+    const digest = await loadWeeklyDigest();
+    const r = await sendDigestTo(req.teamMember, digest);
+    if (!r.ok) return res.status(502).json({ error: `No se pudo enviar el correo: ${r.error}` });
+    res.json({ sent: true, to: req.teamMember.email, week: digest.week });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/finance — métricas del CEO, todo en USD (ventas, facturado, cobranza, líderes, velocidad, conciliación).
 router.get('/', async (req, res) => {
   try {
