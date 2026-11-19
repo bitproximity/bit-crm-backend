@@ -139,7 +139,47 @@ const BITWIFI_TEMPLATE = {
     },
   },
 };
-const TEMPLATES = { bitmusic: BIT_MUSIC_TEMPLATE, bitwifi: BITWIFI_TEMPLATE };
+// Plantilla: réplica del brief «Digital Signage» de Google Forms, con la marca Bit Signage.
+// No había embudo «Bit Signage»: si falta, se crea con las mismas etapas que Bit Music.
+const BIT_SIGNAGE_TEMPLATE = {
+  key: 'bitsignage',
+  slug: 'bitsignage',
+  name: 'Bit Signage · Brief Cartelería Digital',
+  pipeline_name: 'Bit Signage',
+  create_pipeline_like: 'Bit Music',
+  stage_name: 'Prospecto',
+  fields: [
+    { key: 'bs_cargo', label: '¿Cuál es tu cargo dentro de la empresa?', field_type: 'text', required: true },
+    { key: 'bs_puntos_de_venta', label: '¿Cuántos puntos de venta tienen?', field_type: 'number', required: true },
+    { key: 'bs_pantallas', label: '¿Cuántas pantallas tienen?', field_type: 'number', required: true },
+    { key: 'bs_tipo_pantallas', label: '¿Qué tipo de pantallas manejan?', field_type: 'select', options: ['TV tradicionales', 'Monitores profesionales', 'Pantallas LED'], required: true },
+    { key: 'bs_operacion_contenido', label: '¿Necesitan que administremos y operemos el contenido de las pantallas?', field_type: 'select', options: ['Sí', 'No'], required: true },
+    { key: 'bs_gestion_actual', label: '¿Cómo manejan y administran sus pantallas actualmente?', field_type: 'select', options: ['USB', 'Desarrollo in-house', 'Proveedor externo'], required: true },
+    { key: 'bs_objetivo', label: '¿Cuál es tu objetivo principal para utilizar Bit Signage?', field_type: 'text', long: true, required: true },
+  ],
+  settings: {
+    title: 'Digital Signage',
+    description: 'Este brief nos ayudará a entender sus necesidades, adaptarnos a lo que requieren e implementar el servicio de Cartelería Digital.',
+    thank_you: 'Con esta información preparamos la implementación de Cartelería Digital para tu marca y te contactamos muy pronto.',
+    submit_label: 'Enviar',
+    labels: { name: 'Nombre completo', email: 'Correo electrónico', phone: 'Número de teléfono', company: '¿Cuál es el nombre de tu marca?' },
+    required: { email: true, phone: true, company: true },
+    hide_message: true,
+    match_existing: true,
+    product_line: 'Bit Signage',
+    deal_title: '{company} · Bit Signage',
+    theme: {
+      brand_name: 'Bit Signage',
+      logo_url: '/brands/bitsignage-logo.png',
+      primary: '#8500FF',
+      secondary: '#E000FF',
+      accent: '#D9F6FF',
+      background: '#080712',
+      card: '#120F22',
+    },
+  },
+};
+const TEMPLATES = { bitmusic: BIT_MUSIC_TEMPLATE, bitwifi: BITWIFI_TEMPLATE, bitsignage: BIT_SIGNAGE_TEMPLATE };
 
 // Métricas de un formulario a partir de sus envíos guardados.
 // submissions: [{ created_at, deal_id, matched_existing, answers: { name, email, phone, company, custom: { field_id: valor } } }]
@@ -200,7 +240,7 @@ function computeFormMetrics({ submissions, deals, fields, today }) {
   };
 }
 
-module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE, BITWIFI_TEMPLATE };
+module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE, BITWIFI_TEMPLATE, BIT_SIGNAGE_TEMPLATE };
 
 // ── Link corto (slug) y link personalizado por trato ──
 const crypto = require('crypto');

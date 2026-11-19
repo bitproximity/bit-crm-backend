@@ -39,7 +39,7 @@ const fake = createFakeDb({
   companies: [{ id: 'co-toks', name: 'Toks' }],
   contacts: [{ id: 'ct-ana', first_name: 'Ana', email: 'ana@toks.mx', phone: null, company_id: null }],
   deals: [{ id: 'd-toks', title: 'Toks · Bit Music', status: 'ganado', pipeline_id: 'p-music', contact_id: 'ct-other', company_id: 'co-toks', owner_id: 'u-ana', created_at: '2026-09-01' }],
-  activities: [], notifications: [],
+  activities: [], notifications: [], pipeline_stages: [],
 });
 install(fake);
 const sent = [];
@@ -170,9 +170,19 @@ const srv = app.listen(0, async () => {
   const wd = fake.db.deals.find((d) => d.title === 'KFC Ecuador · Bitwifi');
   ok(r.status === 201 && wd && wd.pipeline_id === 'p-wifi' && wd.product_line === 'Bit WiFi', 'un envío del brief crea el trato «Marca · Bitwifi» en Bit WiFi');
 
+  // ── Plantilla Bit Signage (crea el embudo si no existe) ──
+  r = await call('POST', '/api/lead-forms/templates/bitsignage');
+  const sg = r.body;
+  const sp = fake.db.pipelines.find((p) => p.name === 'Bit Signage');
+  const sgStages = fake.db.pipeline_stages.filter((st) => st.pipeline_id === sp?.id);
+  ok(r.status === 201 && sp && sgStages.map((st) => st.name).join() === 'Prospecto,Contactado' && sg.pipeline_id === sp.id && sg.stage_id === sgStages.find((st) => st.name === 'Prospecto').id, 'sin embudo «Bit Signage», lo crea con las mismas etapas de Bit Music y deja el brief en Prospecto');
+  ok(sg.field_ids.length === 7 && sg.slug === 'bitsignage' && sg.settings.theme.logo_url === '/brands/bitsignage-logo.png' && sg.settings.required_field_ids.length === 7, 'el brief de Bit Signage trae sus 7 preguntas obligatorias, logo y link /public/bitsignage');
+  r = await call('POST', '/api/lead-forms/templates/bitsignage');
+  ok(r.body.already_existed && fake.db.pipelines.filter((p) => p.name === 'Bit Signage').length === 1, 'repetir la plantilla no duplica el embudo ni el formulario');
+
   // ── Todo centralizado en el trato ──
   r = await call('GET', '/api/deals/d-toks/form-responses');
-  ok(r.status === 200 && r.body.submissions.length >= 2 && r.body.form_field_ids.length === 19, 'el trato trae todas sus respuestas de formularios y la lista de preguntas de formularios');
+  ok(r.status === 200 && r.body.submissions.length >= 2 && r.body.form_field_ids.length === 26, 'el trato trae todas sus respuestas de formularios y la lista de preguntas de formularios');
   const latestToks = r.body.submissions[0];
   ok(latestToks.form.name === form.name && latestToks.form.logo_url === '/brands/bitmusic-logo.png' && latestToks.answers.length > 0 && latestToks.answers.every((a) => a.label && a.value), 'cada respuesta viene con su formulario (logo) y cada pregunta con su texto');
   ok(r.body.submissions.some((x) => x.contact.company === 'Pollo Feliz'), 'incluye la respuesta que se asignó a mano a este trato');

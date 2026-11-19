@@ -47,7 +47,23 @@ router.post('/templates/:key', requireRole('admin'), async (req, res) => {
   const { data: already } = await supabase.from('lead_forms').select('*').eq('name', tpl.name).limit(1).maybeSingle();
   if (already) return res.json({ ...already, already_existed: true });
 
-  const { data: pipe } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name, position)').ilike('name', tpl.pipeline_name).limit(1).maybeSingle();
+  let { data: pipe } = await supabase.from('pipelines').select('id, name, pipeline_stages(id, name, position)').ilike('name', tpl.pipeline_name).limit(1).maybeSingle();
+  if (!pipe && tpl.create_pipeline_like) {
+    // El embudo aún no existe: se crea con las mismas etapas que el modelo (los embudos son estándar).
+    const { data: model } = await supabase.from('pipelines').select('id, pipeline_stages(name, position)').ilike('name', tpl.create_pipeline_like).limit(1).maybeSingle();
+    const modelStages = [...(model?.pipeline_stages || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    if (!modelStages.length) return res.status(400).json({ error: `No existe el embudo «${tpl.pipeline_name}» ni el modelo «${tpl.create_pipeline_like}» para crearlo.` });
+    const { data: all } = await supabase.from('pipelines').select('position');
+    const nextPos = Math.max(-1, ...(all || []).map((p) => p.position ?? -1)) + 1;
+    const { data: created, error: pErr } = await supabase.from('pipelines').insert({ name: tpl.pipeline_name, position: nextPos }).select('id, name').single();
+    if (pErr) return res.status(400).json({ error: `No se pudo crear el embudo «${tpl.pipeline_name}»: ${pErr.message}` });
+    const { data: newStages, error: sErr } = await supabase.from('pipeline_stages')
+      .insert(modelStages.map((st, i) => ({ pipeline_id: created.id, name: st.name, position: st.position ?? i })))
+      .select('id, name, position');
+    if (sErr) return res.status(400).json({ error: `Se creó el embudo pero no sus etapas: ${sErr.message}` });
+    await logAudit('pipeline', created.id, 'created', req.teamMember.id, { from_template: tpl.key });
+    pipe = { ...created, pipeline_stages: newStages || [] };
+  }
   if (!pipe) return res.status(400).json({ error: `No existe el embudo «${tpl.pipeline_name}».` });
   const stages = [...(pipe.pipeline_stages || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
   const stage = stages.find((st) => st.name.toLowerCase() === tpl.stage_name.toLowerCase()) || stages[0];
