@@ -6,6 +6,7 @@ const { createFakeDb, install } = require('./fakeSupabase');
 const kit = require('../src/utils/leadFormKit');
 
 // ── Utilidades puras ──
+ok(kit.normalizeSettings({ theme: { logo_url: '/brands/x.png' } }).theme.logo_url === '/brands/x.png' && !kit.normalizeSettings({ theme: { logo_url: '//evil.com/x.png' } }).theme.logo_url, 'logo propio del CRM (ruta /brands/…) sí; rutas a otros dominios no');
 const s = kit.normalizeSettings({ title: '  Hola  ', theme: { primary: '#AA00FF', background: 'red;}', logo_url: 'javascript:alert(1)' }, labels: { company: 'Marca', otro: 'x' }, long_field_ids: ['a', 3] });
 ok(s.title === 'Hola' && s.theme.primary === '#AA00FF' && !s.theme.background && !s.theme.logo_url, 'los ajustes solo aceptan colores hex y logos https (nada que inyecte CSS o JS en la página pública)');
 ok(s.labels.company === 'Marca' && !s.labels.otro && s.long_field_ids.length === 1 && s.match_existing === true, 'etiquetas conocidas, listas limpias y «asociar al trato existente» activo por defecto');
@@ -65,7 +66,7 @@ const srv = app.listen(0, async () => {
   ok(r.status === 201 && form.pipeline_id === 'p-music' && form.stage_id === 'st-1' && form.field_ids.length === 9, 'la plantilla crea el formulario en Bit Music → Prospecto con sus 9 preguntas');
   const defs = fake.db.custom_field_definitions;
   ok(defs.length === 9 && defs.every((d) => d.entity_type === 'deal') && defs.find((d) => d.key === 'bm_anuncios_propios').options.join() === 'Sí,No', 'las preguntas quedan como campos del trato (Sí/No como opciones)');
-  ok(form.settings.theme.logo_url.startsWith('https://bitmusicapp.com/') && form.settings.theme.secondary === '#E000FF' && form.settings.long_field_ids.length === 7 && form.settings.required_field_ids.length === 2, 'trae logo y colores de Bit Music, respuestas largas y obligatorias');
+  ok(form.settings.theme.logo_url === '/brands/bitmusic-logo.png' && form.settings.theme.secondary === '#E600FF' && form.settings.long_field_ids.length === 7 && form.settings.required_field_ids.length === 2, 'trae logo y colores de Bit Music, respuestas largas y obligatorias');
   r = await call('POST', '/api/lead-forms/templates/bitmusic');
   ok(r.status === 200 && r.body.already_existed && fake.db.lead_forms.length === 1 && fake.db.custom_field_definitions.length === 9, 'usar la plantilla otra vez no duplica nada');
 
@@ -115,7 +116,7 @@ const srv = app.listen(0, async () => {
 
   // Edición: solo campos permitidos y ajustes saneados
   r = await call('PATCH', `/api/lead-forms/${form.id}`, { submissions_count: 999, settings: { ...form.settings, title: 'Nuevo', theme: { ...form.settings.theme, primary: 'url(x)' } } });
-  ok(r.status === 200 && r.body.submissions_count !== 999 && r.body.settings.title === 'Nuevo' && !r.body.settings.theme.primary && r.body.settings.theme.secondary === '#E000FF', 'editar no deja tocar el contador y limpia los ajustes');
+  ok(r.status === 200 && r.body.submissions_count !== 999 && r.body.settings.title === 'Nuevo' && !r.body.settings.theme.primary && r.body.settings.theme.secondary === '#E600FF', 'editar no deja tocar el contador y limpia los ajustes');
 
   // Sin la tabla de envíos (script 066 sin correr), el formulario sigue funcionando
   fake.failTables.add('lead_form_submissions');

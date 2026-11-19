@@ -34,7 +34,7 @@ function normalizeSettings(raw) {
       ...(HEX.test(theme.accent || '') ? { accent: theme.accent } : {}),
       ...(HEX.test(theme.background || '') ? { background: theme.background } : {}),
       ...(HEX.test(theme.card || '') ? { card: theme.card } : {}),
-      ...(/^https:\/\//i.test(logo) ? { logo_url: logo } : {}),
+      ...(/^https:\/\/[^\s"'<>]+$/i.test(logo) || /^\/(?!\/)[\w\-./]+$/.test(logo) ? { logo_url: logo } : {}),
       ...(clipStr(theme.brand_name, 60) ? { brand_name: clipStr(theme.brand_name, 60) } : {}),
     },
   };
@@ -88,12 +88,12 @@ const BIT_MUSIC_TEMPLATE = {
     deal_title: '{company} · Bit Music',
     theme: {
       brand_name: 'Bit Music',
-      logo_url: 'https://bitmusicapp.com/assets/home/logo.webp',
-      primary: '#AA00FF',
-      secondary: '#E000FF',
-      accent: '#D9F6FF',
-      background: '#0B0A0F',
-      card: '#13111C',
+      logo_url: '/brands/bitmusic-logo.png',   // logo oficial, servido por el propio CRM
+      primary: '#8000FF',
+      secondary: '#E600FF',
+      accent: '#D3EEF8',
+      background: '#151A33',
+      card: '#1F2648',
     },
   },
 };
