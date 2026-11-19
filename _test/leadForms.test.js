@@ -157,6 +157,18 @@ const srv = app.listen(0, async () => {
   r = await call('POST', `/api/lead-forms/submissions/${wrong.id}/assign`, { deal_id: 'no-existe' });
   ok(r.status === 404, 'no se puede asignar a un trato que no existe');
 
+  // ── Plantilla Bitwifi ──
+  fake.db.pipelines.push({ id: 'p-wifi', name: 'Bit WiFi', pipeline_stages: [{ id: 'sw-1', name: 'Prospecto', position: 1 }] });
+  r = await call('POST', '/api/lead-forms/templates/bitwifi');
+  const wf = r.body;
+  ok(r.status === 201 && wf.pipeline_id === 'p-wifi' && wf.stage_id === 'sw-1' && wf.field_ids.length === 10 && wf.slug === 'bitwifi', 'la plantilla Bitwifi crea el brief en Bit WiFi → Prospecto con sus 10 preguntas y link /public/bitwifi');
+  ok(wf.settings.required_field_ids.length === 10 && wf.settings.required.phone && wf.settings.theme.logo_url === '/brands/bitwifi-logo.png' && wf.settings.theme.primary === '#8500FF', 'todas obligatorias como en Google Forms, con logo y colores de Bitwifi');
+  const wid = (k) => fake.db.custom_field_definitions.find((d) => d.key === k).id;
+  r = await call('POST', '/api/public/lead-forms/bitwifi/submit', { name: 'Pedro Gil', email: 'pedro@kfc.ec', phone: '+593 9', company: 'KFC Ecuador', custom_answers: Object.fromEntries(wf.field_ids.map((fid) => [fid, fid === wid('bw_puntos_de_venta') ? '120' : fid === wid('bw_acceso_controladora') ? 'Sí' : 'x'])) });
+  await wait();
+  const wd = fake.db.deals.find((d) => d.title === 'KFC Ecuador · Bitwifi');
+  ok(r.status === 201 && wd && wd.pipeline_id === 'p-wifi' && wd.product_line === 'Bit WiFi', 'un envío del brief crea el trato «Marca · Bitwifi» en Bit WiFi');
+
   // Sin la tabla de envíos (script 066 sin correr), el formulario sigue funcionando
   fake.failTables.add('lead_form_submissions');
   r = await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Eva', email: 'eva@cafe.co', company: 'Café Uno', custom_answers: { [id('bm_puntos_de_venta')]: '2', [id('bm_paises_ciudades')]: 'Lima' } });

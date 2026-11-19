@@ -98,7 +98,48 @@ const BIT_MUSIC_TEMPLATE = {
     },
   },
 };
-const TEMPLATES = { bitmusic: BIT_MUSIC_TEMPLATE };
+// Plantilla: réplica del brief «WiFi Marketing» de Google Forms, con la marca Bitwifi.
+const BITWIFI_TEMPLATE = {
+  key: 'bitwifi',
+  slug: 'bitwifi',
+  name: 'Bitwifi · Brief WiFi Marketing',
+  pipeline_name: 'Bit WiFi',
+  stage_name: 'Prospecto',
+  fields: [
+    { key: 'bw_cargo', label: '¿Cuál es tu cargo dentro de la empresa?', field_type: 'text', required: true },
+    { key: 'bw_puntos_de_venta', label: '¿Cuántos puntos de venta tienen?', field_type: 'number', required: true },
+    { key: 'bw_marca_equipos', label: '¿Qué marca de routers o access points tienen?', field_type: 'text', required: true, hint: 'Ejemplo: Ubiquiti, Cisco Meraki, MikroTik, Ruckus, TP-Link.' },
+    { key: 'bw_acceso_controladora', label: '¿Tienen acceso a la controladora de esos equipos?', field_type: 'select', options: ['Sí', 'No'], required: true },
+    { key: 'bw_ads', label: '¿Están invirtiendo en Ads? ¿Cuál es la que más utilizan?', field_type: 'select', options: ['Facebook Pixel', 'Google Ads', 'TikTok Ads', 'No invertimos en Ads'], required: true },
+    { key: 'bw_crm', label: '¿Qué CRM utilizan?', field_type: 'text', required: true },
+    { key: 'bw_canal_campanas', label: '¿Cuál es el canal que utilizan para enviar campañas de marketing?', field_type: 'select', options: ['Email Marketing', 'SMS', 'WhatsApp'], required: true },
+    { key: 'bw_reviews', label: '¿Qué plataforma de reviews manejan actualmente?', field_type: 'select', options: ['Facebook reviews', 'Google reviews', 'TripAdvisor'], required: true },
+    { key: 'bw_datos_relevantes', label: '¿Qué datos son los más relevantes cuando el cliente se conecta al WiFi?', field_type: 'select', options: ['Nombre completo', 'Email', 'Número de teléfono', 'Fecha de nacimiento', 'Todas las anteriores'], required: true },
+    { key: 'bw_objetivo', label: '¿Cuál es tu objetivo principal para utilizar Bitwifi?', field_type: 'text', long: true, required: true },
+  ],
+  settings: {
+    title: 'WiFi Marketing',
+    description: 'Este brief nos ayudará a entender sus necesidades, adaptarnos a lo que requieren e implementar el servicio de WiFi Marketing.',
+    thank_you: 'Con esta información preparamos la implementación de WiFi Marketing para tu marca y te contactamos muy pronto.',
+    submit_label: 'Enviar',
+    labels: { name: 'Nombre completo', email: 'Correo electrónico', phone: 'Número de teléfono', company: '¿Cuál es el nombre de tu marca?' },
+    required: { email: true, phone: true, company: true },
+    hide_message: true,
+    match_existing: true,
+    product_line: 'Bit WiFi',
+    deal_title: '{company} · Bitwifi',
+    theme: {
+      brand_name: 'Bitwifi',
+      logo_url: '/brands/bitwifi-logo.png',
+      primary: '#8500FF',
+      secondary: '#E000FF',
+      accent: '#D9F6FF',
+      background: '#080712',
+      card: '#120F22',
+    },
+  },
+};
+const TEMPLATES = { bitmusic: BIT_MUSIC_TEMPLATE, bitwifi: BITWIFI_TEMPLATE };
 
 // Métricas de un formulario a partir de sus envíos guardados.
 // submissions: [{ created_at, deal_id, matched_existing, answers: { name, email, phone, company, custom: { field_id: valor } } }]
@@ -159,7 +200,7 @@ function computeFormMetrics({ submissions, deals, fields, today }) {
   };
 }
 
-module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE };
+module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE, BITWIFI_TEMPLATE };
 
 // ── Link corto (slug) y link personalizado por trato ──
 const crypto = require('crypto');
