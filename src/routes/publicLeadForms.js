@@ -4,7 +4,28 @@ const supabase = require('../config/supabase');
 const { sendEmail } = require('../utils/email');
 const { createNotification } = require('../utils/notify');
 const { escapeHtml: h, escapeIlikeValue } = require('../utils/escape');
-const { normalizeSettings, dealTitleFor, pickExistingDeal } = require('../utils/leadFormKit');
+const { normalizeSettings, dealTitleFor, pickExistingDeal, verifyDealToken, UUID_RE } = require('../utils/leadFormKit');
+
+// El formulario se pide por su id o por su link corto (slug), p. ej. /public/bitmusic.
+async function loadForm(key) {
+  const k = String(key || '').slice(0, 80);
+  if (!UUID_RE.test(k) && /^[a-z0-9-]+$/i.test(k)) {
+    const { data, error } = await supabase.from('lead_forms').select('*').eq('slug', k.toLowerCase()).maybeSingle();
+    if (!error && data) return data;
+  }
+  const { data, error } = await supabase.from('lead_forms').select('*').eq('id', k).maybeSingle();
+  return error ? null : data;
+}
+
+// Link personalizado de un trato (?t=…): devuelve el trato con su contacto y empresa, o null.
+async function dealFromToken(form, token) {
+  const dealId = token ? verifyDealToken(form.id, token) : null;
+  if (!dealId) return null;
+  const { data } = await supabase.from('deals')
+    .select('id, title, status, owner_id, contact_id, company_id, contacts(first_name, last_name, email, phone), companies(name)')
+    .eq('id', dealId).maybeSingle();
+  return data || null;
+}
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -20,8 +41,8 @@ router.use(cors({ origin: '*' }));
 // está activo) + las preguntas extra configuradas (los mismos campos personalizados de
 // "trato" que ya existen en Configuración, solo los elegidos para este formulario).
 router.get('/:id', async (req, res) => {
-  const { data, error } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
-  if (error || !data) return res.status(404).json({ error: 'Formulario no encontrado.' });
+  const data = await loadForm(req.params.id);
+  if (!data) return res.status(404).json({ error: 'Formulario no encontrado.' });
 
   let custom_fields = [];
   if (data.field_ids?.length) {
@@ -38,7 +59,21 @@ router.get('/:id', async (req, res) => {
   }));
   // Solo lo que la página pública necesita para pintarse (no el embudo, el dueño ni los conteos).
   const { long_field_ids, required_field_ids, hints, match_existing, product_line, deal_title, ...publicSettings } = settings;
-  res.json({ id: data.id, name: data.name, active: data.active, custom_fields, settings: publicSettings });
+  // Link personalizado: precarga lo que ya sabemos del cliente y lo que ya había respondido.
+  let prefill = null;
+  const deal = await dealFromToken(data, req.query.t);
+  if (deal) {
+    const c = deal.contacts || {};
+    prefill = {
+      name: [c.first_name, c.last_name].filter(Boolean).join(' '), email: c.email || '', phone: c.phone || '', company: deal.companies?.name || '',
+      custom_answers: {},
+    };
+    if (data.field_ids?.length) {
+      const { data: vals } = await supabase.from('custom_field_values').select('field_id, value').eq('entity_id', deal.id).in('field_id', data.field_ids);
+      for (const v of vals || []) if (v.value != null && v.value !== '') prefill.custom_answers[v.field_id] = v.value;
+    }
+  }
+  res.json({ id: data.id, slug: data.slug || null, name: data.name, active: data.active, custom_fields, settings: publicSettings, prefill });
 });
 
 // POST /api/public/lead-forms/:id/submit  { name, email?, phone?, company?, message?, custom_answers?: { field_id: value } }
@@ -64,8 +99,9 @@ router.post('/:id/submit', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Falta el nombre.' });
   if (email && !EMAIL_RE.test(email)) return res.status(400).json({ error: 'El correo no es válido.' });
 
-  const { data: form } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
+  const form = await loadForm(req.params.id);
   if (!form) return res.status(404).json({ error: 'Formulario no encontrado.' });
+  const linkedDeal = await dealFromToken(form, typeof body.t === 'string' ? body.t : req.query.t);
   if (!form.active) return res.status(400).json({ error: 'Este formulario ya no está activo.' });
   const settings = normalizeSettings(form.settings);
 
@@ -88,8 +124,8 @@ router.post('/:id/submit', async (req, res) => {
   }
 
   try {
-    let companyId = null;
-    if (company) {
+    let companyId = linkedDeal?.company_id || null;
+    if (company && !(linkedDeal?.companies?.name && linkedDeal.companies.name.toLowerCase() === company.toLowerCase())) {
       // (antes: maybeSingle() daba error si ya había 2 con ese nombre y se creaba una tercera)
       const existingId = await require('../utils/findCompany').findCompanyIdByName(company);
       if (existingId) companyId = existingId;
@@ -102,7 +138,8 @@ router.post('/:id/submit', async (req, res) => {
 
     const [firstName, ...rest] = name.split(' ');
     let contactId = null;
-    if (email) {
+    if (linkedDeal?.contact_id && (!email || (linkedDeal.contacts?.email || '').toLowerCase() === email.toLowerCase())) contactId = linkedDeal.contact_id;
+    if (!contactId && email) {
       const { data: existing } = await supabase.from('contacts').select('id, phone, company_id').ilike('email', escapeIlikeValue(email)).limit(1).maybeSingle();
       if (existing) {
         contactId = existing.id;
@@ -133,8 +170,8 @@ router.post('/:id/submit', async (req, res) => {
 
     // ¿Ya hay un trato de este cliente en el embudo del formulario? Entonces la respuesta va ahí,
     // en vez de crear un duplicado (p. ej. un cliente ya ganado que llena su brief musical).
-    let existingDeal = null;
-    if (settings.match_existing) {
+    let existingDeal = linkedDeal ? { id: linkedDeal.id, title: linkedDeal.title, status: linkedDeal.status, owner_id: linkedDeal.owner_id } : null;
+    if (!existingDeal && settings.match_existing) {
       const cols = 'id, title, status, owner_id, created_at';
       let { data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', form.pipeline_id).eq('contact_id', contactId);
       existingDeal = pickExistingDeal(cands);

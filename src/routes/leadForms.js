@@ -2,7 +2,8 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../utils/audit');
-const { normalizeSettings, computeFormMetrics, TEMPLATES } = require('../utils/leadFormKit');
+const { normalizeSettings, computeFormMetrics, TEMPLATES, slugify, validSlug, signDealToken } = require('../utils/leadFormKit');
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 const { fetchAll, selectIn } = require('../utils/fetchAll');
 const { todayInTz } = require('../utils/businessDate');
 
@@ -69,10 +70,16 @@ router.post('/templates/:key', requireRole('admin'), async (req, res) => {
     required_field_ids: tpl.fields.filter((f) => f.required).map((f) => byKey[f.key]),
     hints: Object.fromEntries(tpl.fields.filter((f) => f.hint).map((f) => [byKey[f.key], f.hint])),
   });
-  const { data, error } = await supabase.from('lead_forms').insert({
+  const row = {
     name: tpl.name, pipeline_id: pipe.id, stage_id: stage.id, owner_id: null,
-    field_ids: tpl.fields.map((f) => byKey[f.key]), settings, active: true, created_by: req.teamMember.id,
-  }).select().single();
+    field_ids: tpl.fields.map((f) => byKey[f.key]), settings, active: true, ...(tpl.slug ? { slug: tpl.slug } : {}), created_by: req.teamMember.id,
+  };
+  let { data, error } = await supabase.from('lead_forms').insert(row).select().single();
+  if (error && /slug/.test(error.message || '')) {
+    // Sin el script 067 todavía: se crea igual, sin link corto.
+    delete row.slug;
+    ({ data, error } = await supabase.from('lead_forms').insert(row).select().single());
+  }
   if (error) {
     const hint = /settings/.test(error.message || '') ? ' Corre primero el script 066 en Supabase.' : '';
     return res.status(400).json({ error: error.message + hint });
@@ -112,14 +119,71 @@ router.get('/:id/responses', async (req, res) => {
         deal: d ? { id: d.id, title: d.title, status: d.status, stage: d.pipeline_stages?.name || null } : (s.deal_id ? { id: s.deal_id, title: '(trato eliminado)', status: null } : null),
       };
     });
-  res.json({ form: { id: form.id, name: form.name, settings: normalizeSettings(form.settings) }, fields, metrics, rows });
+  res.json({ form: { id: form.id, name: form.name, slug: form.slug || null, pipeline_id: form.pipeline_id, settings: normalizeSettings(form.settings) }, fields, metrics, rows });
+});
+
+// GET /api/lead-forms/:id/deal-link?deal_id= — link personalizado para un trato: lo que el cliente
+// responda cae en ese trato, con sus datos ya llenos. La firma impide adivinar el de otro trato.
+router.get('/:id/deal-link', async (req, res) => {
+  const { data: form } = await supabase.from('lead_forms').select('id, slug').eq('id', req.params.id).maybeSingle();
+  if (!form) return res.status(404).json({ error: 'Formulario no encontrado.' });
+  const { data: deal } = await supabase.from('deals').select('id, title').eq('id', String(req.query.deal_id || '')).maybeSingle();
+  if (!deal) return res.status(404).json({ error: 'Trato no encontrado.' });
+  const base = `${PUBLIC_APP_URL}/public/${form.slug || `lead-forms/${form.id}`}`;
+  res.json({ url: `${base}?t=${encodeURIComponent(signDealToken(form.id, deal.id))}`, deal });
+});
+
+// POST /api/lead-forms/submissions/:sid/assign { deal_id } — mueve una respuesta a otro trato:
+// copia las respuestas a ese trato, deja nota y la respuesta queda apuntando al nuevo.
+router.post('/submissions/:sid/assign', requireRole('admin'), async (req, res) => {
+  const { data: sub, error: sErr } = await supabase.from('lead_form_submissions').select('*').eq('id', req.params.sid).maybeSingle();
+  if (sErr || !sub) return res.status(404).json({ error: 'Respuesta no encontrada.' });
+  const { data: deal } = await supabase.from('deals').select('id, title').eq('id', String(req.body?.deal_id || '')).maybeSingle();
+  if (!deal) return res.status(404).json({ error: 'Trato no encontrado.' });
+  if (deal.id === sub.deal_id) return res.json({ ok: true, unchanged: true });
+  const { data: form } = await supabase.from('lead_forms').select('id, name, field_ids').eq('id', sub.form_id).maybeSingle();
+
+  const custom = sub.answers?.custom || {};
+  const rows = Object.entries(custom).filter(([fid, v]) => (form?.field_ids || []).includes(fid) && String(v ?? '').trim() !== '')
+    .map(([field_id, value]) => ({ field_id, entity_id: deal.id, value: String(value), updated_at: new Date().toISOString() }));
+  if (rows.length) {
+    const { error } = await supabase.from('custom_field_values').upsert(rows, { onConflict: 'field_id,entity_id' });
+    if (error) return res.status(400).json({ error: error.message });
+  }
+  let labels = [];
+  if (rows.length) {
+    const { data: defs } = await supabase.from('custom_field_definitions').select('id, label').in('id', rows.map((r) => r.field_id));
+    labels = rows.map((r) => `${defs?.find((d) => d.id === r.field_id)?.label || 'Pregunta'}: ${r.value}`);
+  }
+  const a = sub.answers || {};
+  await supabase.from('activities').insert({
+    entity_type: 'deal', entity_id: deal.id, type: 'nota',
+    title: `Respuestas del formulario «${form?.name || ''}» (asignadas a mano)`,
+    summary: [`${a.name || ''}${a.company ? ` (${a.company})` : ''} · ${a.email || ''}`, ...labels, a.message ? `Mensaje: ${a.message}` : ''].filter(Boolean).join('\n').slice(0, 8000),
+  });
+  const previous = sub.deal_id;
+  const { error: uErr } = await supabase.from('lead_form_submissions').update({ deal_id: deal.id, matched_existing: true }).eq('id', sub.id);
+  if (uErr) return res.status(400).json({ error: uErr.message });
+  await logAudit('lead_form', sub.form_id, 'updated', req.teamMember.id, { submission: sub.id, from_deal: previous, to_deal: deal.id });
+  // Si el trato anterior lo había creado esta misma respuesta, se avisa para poder borrarlo.
+  res.json({ ok: true, deal, previous_deal_id: previous, previous_was_auto_created: !sub.matched_existing && !!previous });
 });
 
 // PATCH /api/lead-forms/:id  { name?, active?, owner_id?, pipeline_id?, stage_id? }
-const EDITABLE = ['name', 'active', 'owner_id', 'pipeline_id', 'stage_id', 'field_ids', 'settings'];
+const EDITABLE = ['name', 'active', 'owner_id', 'pipeline_id', 'stage_id', 'field_ids', 'settings', 'slug'];
 router.patch('/:id', requireRole('admin'), async (req, res) => {
   const patch = Object.fromEntries(Object.entries(req.body || {}).filter(([k]) => EDITABLE.includes(k)));
   if (patch.settings !== undefined) patch.settings = normalizeSettings(patch.settings);
+  if (patch.slug !== undefined) {
+    if (patch.slug === null || patch.slug === '') patch.slug = null;
+    else {
+      const slug = slugify(patch.slug);
+      if (!validSlug(slug)) return res.status(400).json({ error: 'Ese link no sirve: usa letras, números y guiones (ej. bitmusic).' });
+      const { data: taken } = await supabase.from('lead_forms').select('id').eq('slug', slug).neq('id', req.params.id).limit(1).maybeSingle();
+      if (taken) return res.status(409).json({ error: `El link «${slug}» ya lo usa otro formulario.` });
+      patch.slug = slug;
+    }
+  }
   if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nada que actualizar.' });
   const { data, error } = await supabase.from('lead_forms').update(patch).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });

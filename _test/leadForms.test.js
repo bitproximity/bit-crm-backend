@@ -118,6 +118,45 @@ const srv = app.listen(0, async () => {
   r = await call('PATCH', `/api/lead-forms/${form.id}`, { submissions_count: 999, settings: { ...form.settings, title: 'Nuevo', theme: { ...form.settings.theme, primary: 'url(x)' } } });
   ok(r.status === 200 && r.body.submissions_count !== 999 && r.body.settings.title === 'Nuevo' && !r.body.settings.theme.primary && r.body.settings.theme.secondary === '#E600FF', 'editar no deja tocar el contador y limpia los ajustes');
 
+  // ── Link corto ──
+  ok(form.slug === 'bitmusic', 'la plantilla deja el link corto «bitmusic»');
+  r = await call('GET', '/api/public/lead-forms/bitmusic');
+  ok(r.status === 200 && r.body.id === form.id && r.body.slug === 'bitmusic', 'el formulario abre por su link corto /public/bitmusic');
+  r = await call('PATCH', `/api/lead-forms/${form.id}`, { slug: 'Brief Música!' });
+  ok(r.status === 200 && r.body.slug === 'brief-musica', 'el link se puede cambiar y se limpia (sin tildes ni espacios)');
+  fake.db.lead_forms.push({ id: 'otro', name: 'Otro', slug: 'ocupado', field_ids: [], active: true });
+  r = await call('PATCH', `/api/lead-forms/${form.id}`, { slug: 'ocupado' });
+  ok(r.status === 409 && /ya lo usa/.test(r.body.error), 'no deja repetir el link de otro formulario');
+  r = await call('PATCH', `/api/lead-forms/${form.id}`, { slug: 'lead-forms' });
+  ok(r.status === 400, 'no deja usar rutas reservadas del CRM');
+  await call('PATCH', `/api/lead-forms/${form.id}`, { slug: 'bitmusic' });
+
+  // ── Link personalizado por trato ──
+  fake.db.deals.push({ id: '11111111-1111-4111-8111-111111111111', title: 'Grupo Calesa · Bit Music', status: 'abierto', pipeline_id: 'p-music', contact_id: 'ct-cal', company_id: 'co-cal', owner_id: 'u-ana', contacts: { first_name: 'Rosa', last_name: 'Díaz', email: 'rosa@calesa.pa', phone: '+507 6' }, companies: { name: 'Grupo Calesa' } });
+  fake.db.contacts.push({ id: 'ct-cal', first_name: 'Rosa', email: 'rosa@calesa.pa' }); fake.db.companies.push({ id: 'co-cal', name: 'Grupo Calesa' });
+  fake.db.custom_field_values.push({ field_id: id('bm_puntos_de_venta'), entity_id: '11111111-1111-4111-8111-111111111111', value: '40' });
+  r = await call('GET', `/api/lead-forms/${form.id}/deal-link?deal_id=11111111-1111-4111-8111-111111111111`);
+  ok(r.status === 200 && r.body.url.startsWith('https://crm.bitproximity.com/public/bitmusic?t=11111111-1111-4111-8111-111111111111.'), 'genera el link del trato sobre el link corto');
+  const t = decodeURIComponent(r.body.url.split('?t=')[1]);
+  r = await call('GET', `/api/public/lead-forms/bitmusic?t=${encodeURIComponent(t)}`);
+  ok(r.body.prefill && r.body.prefill.name === 'Rosa Díaz' && r.body.prefill.email === 'rosa@calesa.pa' && r.body.prefill.company === 'Grupo Calesa' && r.body.prefill.custom_answers[id('bm_puntos_de_venta')] === '40', 'con el link del trato, el formulario llega con los datos del cliente y lo que ya había respondido');
+  r = await call('GET', `/api/public/lead-forms/bitmusic?t=11111111-1111-4111-8111-111111111111.falsificado00000000000`);
+  ok(r.body.prefill === null, 'un link con la firma alterada no muestra datos de nadie');
+  const before = fake.db.deals.length; sent.length = 0;
+  r = await call('POST', '/api/public/lead-forms/bitmusic/submit', { t, name: 'Rosa Díaz', email: 'rosa.diaz@gmail.com', company: 'Calesa', custom_answers: { [id('bm_puntos_de_venta')]: '42', [id('bm_paises_ciudades')]: 'Panamá' } });
+  await wait();
+  ok(r.status === 201 && fake.db.deals.length === before, 'responder desde el link del trato no crea otro trato, aunque escriba otro correo o marca');
+  ok(fake.db.custom_field_values.find((v) => v.entity_id === '11111111-1111-4111-8111-111111111111' && v.field_id === id('bm_puntos_de_venta')).value === '42', 'las respuestas quedan en ESE trato');
+  ok(sent.some((e) => e.to === 'ana@x.com'), 'avisa a la responsable de ese trato');
+
+  // ── Reasignar una respuesta ──
+  const wrong = fake.db.lead_form_submissions.find((x) => x.answers.company === 'Pollo Feliz');
+  r = await call('POST', `/api/lead-forms/submissions/${wrong.id}/assign`, { deal_id: 'd-toks' });
+  ok(r.status === 200 && r.body.previous_was_auto_created === true && fake.db.lead_form_submissions.find((x) => x.id === wrong.id).deal_id === 'd-toks', 'una respuesta se puede mover a otro trato (y avisa si el anterior lo había creado ella)');
+  ok(fake.db.activities.some((a) => a.entity_id === 'd-toks' && /asignadas a mano/.test(a.title) && /Pollo Feliz/.test(a.summary)), 'el trato de destino recibe las respuestas y una nota');
+  r = await call('POST', `/api/lead-forms/submissions/${wrong.id}/assign`, { deal_id: 'no-existe' });
+  ok(r.status === 404, 'no se puede asignar a un trato que no existe');
+
   // Sin la tabla de envíos (script 066 sin correr), el formulario sigue funcionando
   fake.failTables.add('lead_form_submissions');
   r = await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Eva', email: 'eva@cafe.co', company: 'Café Uno', custom_answers: { [id('bm_puntos_de_venta')]: '2', [id('bm_paises_ciudades')]: 'Lima' } });

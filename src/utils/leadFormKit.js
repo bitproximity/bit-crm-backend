@@ -61,6 +61,7 @@ function pickExistingDeal(deals) {
 // Plantilla: réplica del formulario «Musicalizamos espacios comerciales» de forms.app.
 const BIT_MUSIC_TEMPLATE = {
   key: 'bitmusic',
+  slug: 'bitmusic',
   name: 'Bit Music · Perfil musical de la marca',
   pipeline_name: 'Bit Music',
   stage_name: 'Prospecto',
@@ -159,3 +160,38 @@ function computeFormMetrics({ submissions, deals, fields, today }) {
 }
 
 module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE };
+
+// ── Link corto (slug) y link personalizado por trato ──
+const crypto = require('crypto');
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RESERVED_SLUGS = new Set(['lead-forms', 'b2b', 'f', 'assets', 'brands', 'api']);
+
+// «Bit Music Brief!» → «bit-music-brief». Devuelve '' si no queda nada usable.
+function slugify(v) {
+  return String(v || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+function validSlug(v) {
+  return typeof v === 'string' && /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(v) && !RESERVED_SLUGS.has(v) && !UUID_RE.test(v);
+}
+
+// Firma del link de un trato: nadie puede inventar el de otro trato cambiando el id.
+const secret = () => process.env.LEAD_LINK_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || 'bit-crm';
+function signDealToken(formId, dealId) {
+  const sig = crypto.createHmac('sha256', secret()).update(`${formId}:${dealId}`).digest('base64url').slice(0, 22);
+  return `${dealId}.${sig}`;
+}
+function verifyDealToken(formId, token) {
+  if (typeof token !== 'string' || token.length > 120) return null;
+  const [dealId, sig] = token.split('.');
+  if (!dealId || !sig || !UUID_RE.test(dealId)) return null;
+  const expected = signDealToken(formId, dealId).split('.')[1];
+  const a = Buffer.from(sig); const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b) ? dealId : null;
+}
+
+module.exports.slugify = slugify;
+module.exports.validSlug = validSlug;
+module.exports.signDealToken = signDealToken;
+module.exports.verifyDealToken = verifyDealToken;
+module.exports.UUID_RE = UUID_RE;
