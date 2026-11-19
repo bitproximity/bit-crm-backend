@@ -99,7 +99,8 @@ const srv = app.listen(0, async () => {
   const note = fake.db.activities.find((a) => a.entity_id === 'd-toks');
   ok(note && /Respuestas del formulario/.test(note.title) && /Bad Bunny/.test(note.summary), 'deja una nota en el trato con todas las respuestas');
   ok(fake.db.contacts.find((c) => c.id === 'ct-ana').phone === '+52 55' && fake.db.contacts.find((c) => c.id === 'ct-ana').company_id === 'co-toks', 'completa el teléfono y la empresa que le faltaban al contacto');
-  ok(sent.length === 1 && sent[0].to === 'ana@x.com' && /Respuesta de cliente/.test(sent[0].subject), 'avisa al responsable de ese trato');
+  ok(sent.some((e) => e.to === 'ana@x.com') && /Respuesta de cliente · Bit Music: toks/i.test(sent[0].subject), 'avisa al responsable de ese trato');
+  ok(sent.length === 2 && sent.some((e) => e.to === 'mario@bitproximity.com') && /\?tab=respuestas/.test(sent[0].html) && /Bad Bunny/.test(sent[0].html), 'y SIEMPRE a mario@bitproximity.com, con todas las respuestas y el botón al trato');
   sub = fake.db.lead_form_submissions[1];
   ok(sub.deal_id === 'd-toks' && sub.matched_existing === true, 'el envío queda marcado como «asociado a trato existente»');
 
@@ -179,6 +180,16 @@ const srv = app.listen(0, async () => {
   ok(sg.field_ids.length === 7 && sg.slug === 'bitsignage' && sg.settings.theme.logo_url === '/brands/bitsignage-logo.png' && sg.settings.required_field_ids.length === 7, 'el brief de Bit Signage trae sus 7 preguntas obligatorias, logo y link /public/bitsignage');
   r = await call('POST', '/api/lead-forms/templates/bitsignage');
   ok(r.body.already_existed && fake.db.pipelines.filter((p) => p.name === 'Bit Signage').length === 1, 'repetir la plantilla no duplica el embudo ni el formulario');
+
+  // ── A quién se avisa ──
+  r = await call('PATCH', `/api/lead-forms/${form.id}`, { settings: { ...fake.db.lead_forms.find((x) => x.id === form.id).settings, notify_emails: ['ventas@bitproximity.com', 'no-es-correo', 'VENTAS@bitproximity.com'] } });
+  ok(r.status === 200 && r.body.settings.notify_emails.join() === 'ventas@bitproximity.com', 'los correos a avisar se limpian (sin inválidos ni repetidos)');
+  sent.length = 0;
+  await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Iván', email: 'ivan@nuevo.co', company: 'Nuevo Café', custom_answers: { [id('bm_puntos_de_venta')]: '1', [id('bm_paises_ciudades')]: 'Cali' } });
+  await wait();
+  ok(sent.some((e) => e.to === 'ventas@bitproximity.com') && !sent.some((e) => e.to === 'mario@bitproximity.com'), 'si cambias la lista, avisa a esos correos');
+  await call('PATCH', `/api/lead-forms/${form.id}`, { settings: { ...fake.db.lead_forms.find((x) => x.id === form.id).settings, notify_emails: [] } });
+  ok(fake.db.lead_forms.find((x) => x.id === form.id).settings.notify_emails.length === 0, 'vaciar la lista a propósito se respeta (no vuelve a poner a Mario)');
 
   // ── Todo centralizado en el trato ──
   r = await call('GET', '/api/deals/d-toks/form-responses');

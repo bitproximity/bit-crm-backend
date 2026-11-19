@@ -260,54 +260,78 @@ router.post('/:id/submit', async (req, res) => {
 
 async function notifyNewLead(form, deal, submission, customAnswers, attached) {
   const dealId = deal.id;
-  let recipients = [];
+  const settings = normalizeSettings(form.settings);
+  const byEmail = new Map();
+  const add = (m) => { if (m?.email) byEmail.set(m.email.toLowerCase(), m); };
+
+  // 1) El responsable: el del trato si la respuesta fue a un trato existente; si no, el del formulario;
+  //    si tampoco hay, todos los admin.
   const ownerId = (attached && deal.owner_id) || form.owner_id;
   if (ownerId) {
     const { data: owner } = await supabase.from('team_members').select('id, email, full_name').eq('id', ownerId).maybeSingle();
-    if (owner) recipients = [owner];
+    add(owner);
   } else {
     const { data: admins } = await supabase.from('team_members').select('id, email, full_name').eq('role', 'admin').eq('active', true);
-    recipients = admins || [];
+    (admins || []).forEach(add);
   }
-  if (recipients.length === 0) return;
+  // 2) Siempre, los correos configurados en el formulario (por defecto mario@bitproximity.com).
+  for (const email of settings.notify_emails) {
+    if (byEmail.has(email)) continue;
+    const { data: tm } = await supabase.from('team_members').select('id, email, full_name').ilike('email', escapeIlikeValue(email)).limit(1).maybeSingle();
+    byEmail.set(email, tm || { id: null, email });
+  }
+  const recipients = [...byEmail.values()];
+  if (recipients.length === 0) return { sent: 0 };
 
-  let customLines = '';
+  let rows = [];
   if (customAnswers && form.field_ids?.length) {
     const { data: defs } = await supabase.from('custom_field_definitions').select('id, label').in('id', form.field_ids);
-    customLines = Object.entries(customAnswers)
-      .filter(([fieldId, value]) => form.field_ids.includes(fieldId) && value)
-      .map(([fieldId, value]) => {
-        const label = defs?.find((d) => d.id === fieldId)?.label || fieldId;
-        return `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">${h(label)}</td><td style="padding:4px 0;">${h(value)}</td></tr>`;
-      })
-      .join('');
+    rows = form.field_ids.filter((fid) => customAnswers[fid]).map((fid) => [defs?.find((d) => d.id === fid)?.label || 'Pregunta', customAnswers[fid]]);
   }
+  const L = settings.labels;
+  const base = [[L.name || 'Nombre', submission.name], [L.email || 'Correo', submission.email], [L.phone || 'Teléfono', submission.phone], [L.company || 'Empresa', submission.company]].filter(([, v]) => v);
+  const tr = ([k, v]) => `<tr><td style="padding:8px 14px 8px 0;color:#6B6880;font-size:13px;vertical-align:top;width:42%;border-bottom:1px solid #EEECF3;">${h(k)}</td><td style="padding:8px 0;font-size:14px;color:#14121F;border-bottom:1px solid #EEECF3;white-space:pre-wrap;">${h(v)}</td></tr>`;
 
-  const dealUrl = `${PUBLIC_APP_URL}/deals/${dealId}`;
+  const brand = settings.theme.brand_name || 'Bit CRM';
+  const who = submission.company || submission.name;
+  const dealUrl = `${PUBLIC_APP_URL}/deals/${dealId}?tab=respuestas`;
+  const logo = settings.theme.logo_url ? (settings.theme.logo_url.startsWith('/') ? `${PUBLIC_APP_URL}${settings.theme.logo_url}` : settings.theme.logo_url) : null;
   const html = `
-    <div style="font-family: sans-serif; color: #1a1a2e; max-width: 480px;">
-      <p>${attached ? `Un cliente que ya tenía trato respondió <strong>${h(form.name)}</strong> (las respuestas quedaron en «${h(deal.title || '')}»):` : `Nuevo lead desde <strong>${h(form.name)}</strong>:`}</p>
-      <table style="border-collapse:collapse;">
-        <tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Nombre</td><td style="padding:4px 0;">${h(submission.name)}</td></tr>
-        ${submission.email ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Correo</td><td style="padding:4px 0;">${h(submission.email)}</td></tr>` : ''}
-        ${submission.phone ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Teléfono</td><td style="padding:4px 0;">${h(submission.phone)}</td></tr>` : ''}
-        ${submission.company ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Empresa</td><td style="padding:4px 0;">${h(submission.company)}</td></tr>` : ''}
-        ${customLines}
-      </table>
-      ${submission.message ? `<p style="margin-top:12px;"><strong>Mensaje:</strong><br/>${h(submission.message)}</p>` : ''}
-      <a href="${dealUrl}" style="display:inline-block;margin-top:16px;color:#8500FF;">Ver el trato en Bit CRM →</a>
+  <div style="background:#F4F3F8;padding:24px 12px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #E6E3EE;">
+      <div style="background:${settings.theme.background || '#080712'};padding:20px 24px;">
+        ${logo ? `<img src="${h(logo)}" alt="${h(brand)}" height="32" style="height:32px;display:block;">` : `<span style="color:#fff;font-size:18px;font-weight:bold;">${h(brand)}</span>`}
+      </div>
+      <div style="height:3px;background:linear-gradient(90deg,${settings.theme.primary || '#8500FF'},${settings.theme.secondary || '#E000FF'});"></div>
+      <div style="padding:24px;">
+        <p style="margin:0 0 4px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8500FF;">${attached ? 'Respuesta de un cliente' : 'Nueva respuesta'}</p>
+        <h1 style="margin:0 0 6px;font-size:20px;color:#14121F;">${h(who)} respondió «${h(form.name)}»</h1>
+        <p style="margin:0 0 18px;font-size:14px;color:#6B6880;">${attached ? `Las respuestas quedaron en el trato «${h(deal.title || '')}».` : `Se creó el trato «${h(deal.title || '')}».`}</p>
+        <table style="border-collapse:collapse;width:100%;">${base.map(tr).join('')}${rows.map(tr).join('')}</table>
+        ${submission.message ? `<p style="margin:16px 0 0;font-size:14px;color:#14121F;"><strong>Mensaje:</strong><br>${h(submission.message)}</p>` : ''}
+        <a href="${dealUrl}" style="display:inline-block;margin-top:22px;padding:12px 20px;border-radius:10px;background:#8500FF;color:#ffffff;text-decoration:none;font-weight:bold;font-size:14px;">Ver el trato en Bit CRM</a>
+      </div>
     </div>
-  `;
+    <p style="text-align:center;font-size:11px;color:#9A97AA;margin:14px 0 0;">Recibes este aviso porque estás en «Avisar por correo a» de este formulario.</p>
+  </div>`;
+  const text = [`${who} respondió «${form.name}».`, ...base.map(([k, v]) => `${k}: ${v}`), ...rows.map(([k, v]) => `${k}: ${v}`), submission.message ? `Mensaje: ${submission.message}` : '', `Ver el trato: ${dealUrl}`].filter(Boolean).join('\n');
+  const subject = `${attached ? 'Respuesta de cliente' : 'Nuevo lead'} · ${brand}: ${String(who).replace(/[\r\n]+/g, ' ')}`.slice(0, 180);
 
+  let sent = 0;
   for (const r of recipients) {
-    sendEmail({ to: r.email, subject: `${attached ? 'Respuesta de cliente' : 'Nuevo lead'}: ${String(form.name).replace(/[\r\n]+/g, ' ')}`, html }).catch(() => {});
-    createNotification({
-      recipient_id: r.id, type: 'new_lead',
-      title: `${attached ? 'Respondió el formulario' : 'Nuevo lead'}: ${submission.company || submission.name}`,
-      body: `Desde el formulario "${form.name}"`,
-      entity_type: 'deal', entity_id: dealId, link: `/deals/${dealId}`,
-    });
+    const result = await sendEmail({ to: r.email, subject, html, text }).catch((err) => ({ ok: false, error: err.message }));
+    if (result && result.ok === false) console.error(`[lead-forms] no se pudo enviar el aviso a ${r.email}: ${result.error}`);
+    else sent += 1;
+    if (r.id) {
+      createNotification({
+        recipient_id: r.id, type: 'new_lead',
+        title: `${attached ? 'Respondió el formulario' : 'Nuevo lead'}: ${who}`,
+        body: `Desde el formulario "${form.name}"`,
+        entity_type: 'deal', entity_id: dealId, link: `/deals/${dealId}?tab=respuestas`,
+      });
+    }
   }
+  return { sent };
 }
 
 module.exports = router;

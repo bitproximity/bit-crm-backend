@@ -2,6 +2,8 @@
 // cómo se asocia un envío a un trato que ya existe, la plantilla de Bit Music y las métricas
 // de respuestas. Separado de las rutas para poder probarlo sin servidor.
 
+const EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i;
+const DEFAULT_NOTIFY_EMAILS = () => (process.env.LEAD_NOTIFY_DEFAULT || 'mario@bitproximity.com').split(',').map((e) => e.trim().toLowerCase()).filter((e) => EMAIL_RE.test(e));
 const clipStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const HEX = /^#[0-9a-f]{6}$/i;
 const ids = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 60) : []);
@@ -26,6 +28,11 @@ function normalizeSettings(raw) {
     required_field_ids: ids(s.required_field_ids),
     hints: Object.fromEntries(Object.entries(hints).slice(0, 60).map(([k, v]) => [k, clipStr(v, 300)]).filter(([, v]) => v)),
     match_existing: s.match_existing !== false,
+    // A quién avisar por correo en cada respuesta (además del responsable). Si nunca se configuró,
+    // va a la dirección por defecto (Mario); si se dejó vacío a propósito, a nadie extra.
+    notify_emails: Array.isArray(s.notify_emails)
+      ? [...new Set(s.notify_emails.map((e) => String(e || '').trim().toLowerCase()).filter((e) => EMAIL_RE.test(e)))].slice(0, 10)
+      : DEFAULT_NOTIFY_EMAILS(),
     product_line: clipStr(s.product_line, 60),
     deal_title: clipStr(s.deal_title, 120),
     theme: {
