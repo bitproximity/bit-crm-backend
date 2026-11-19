@@ -53,6 +53,7 @@ const express = require(path.resolve(__dirname, '../node_modules/express'));
 const app = express(); app.use(express.json());
 app.use('/api/public/lead-forms', require('../src/routes/publicLeadForms'));
 app.use('/api/lead-forms', require('../src/routes/leadForms'));
+app.use('/api/deals', require('../src/routes/deals'));
 
 const srv = app.listen(0, async () => {
   const call = (method, p, body) => new Promise((r) => {
@@ -168,6 +169,16 @@ const srv = app.listen(0, async () => {
   await wait();
   const wd = fake.db.deals.find((d) => d.title === 'KFC Ecuador · Bitwifi');
   ok(r.status === 201 && wd && wd.pipeline_id === 'p-wifi' && wd.product_line === 'Bit WiFi', 'un envío del brief crea el trato «Marca · Bitwifi» en Bit WiFi');
+
+  // ── Todo centralizado en el trato ──
+  r = await call('GET', '/api/deals/d-toks/form-responses');
+  ok(r.status === 200 && r.body.submissions.length >= 2 && r.body.form_field_ids.length === 19, 'el trato trae todas sus respuestas de formularios y la lista de preguntas de formularios');
+  const latestToks = r.body.submissions[0];
+  ok(latestToks.form.name === form.name && latestToks.form.logo_url === '/brands/bitmusic-logo.png' && latestToks.answers.length > 0 && latestToks.answers.every((a) => a.label && a.value), 'cada respuesta viene con su formulario (logo) y cada pregunta con su texto');
+  ok(r.body.submissions.some((x) => x.contact.company === 'Pollo Feliz'), 'incluye la respuesta que se asignó a mano a este trato');
+  r = await call('GET', '/api/deals?pipeline_id=p-music');
+  const card = (r.body || []).find((d) => d.id === 'd-toks');
+  ok(card && card.form_response && card.form_response.count >= 2 && card.form_response.form === form.name, 'en el Pipeline, la tarjeta del trato sabe que respondió (y cuántas veces)');
 
   // Sin la tabla de envíos (script 066 sin correr), el formulario sigue funcionando
   fake.failTables.add('lead_form_submissions');

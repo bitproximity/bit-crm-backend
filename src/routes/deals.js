@@ -164,7 +164,63 @@ router.get('/', async (req, res) => {
     console.error('next_activity:', err.message);
   }
 
+  // ¿Respondió algún formulario? Para el distintivo de la tarjeta en el Pipeline. Si la tabla aún
+  // no existe (script 066 sin correr) o falla, el Pipeline se muestra igual, sin la marca.
+  if (allDeals.length) try {
+    const { data: subs, error: subErr } = await selectIn(
+      () => supabase.from('lead_form_submissions').select('deal_id, form_id, created_at'),
+      'deal_id',
+      allDeals.map((d) => d.id)
+    );
+    if (subErr) throw new Error(subErr.message);
+    const formName = new Map();
+    if ((subs || []).length) {
+      const { data: lf } = await supabase.from('lead_forms').select('id, name');
+      for (const f of lf || []) formName.set(f.id, f.name);
+    }
+    const last = new Map();
+    for (const sub of subs || []) {
+      const cur = last.get(sub.deal_id);
+      if (!cur || sub.created_at > cur.at) last.set(sub.deal_id, { at: sub.created_at, form: formName.get(sub.form_id) || null, count: (cur?.count || 0) + 1 });
+      else cur.count += 1;
+    }
+    for (const d of allDeals) { const f = last.get(d.id); if (f) d.form_response = { last_at: f.at, form: f.form, count: f.count }; }
+  } catch (err) {
+    console.error('form_response:', err.message);
+  }
+
   res.json(allDeals);
+});
+
+// GET /api/deals/:id/form-responses — todo lo que este cliente respondió en los formularios, con
+// cada pregunta y su respuesta, más los ids de las preguntas de formularios (para no repetirlas
+// vacías en «Detalles»).
+router.get('/:id/form-responses', async (req, res) => {
+  const { data: forms } = await supabase.from('lead_forms').select('id, name, slug, field_ids, settings');
+  const formFieldIds = [...new Set((forms || []).flatMap((f) => f.field_ids || []))];
+  const { data: subs, error } = await supabase.from('lead_form_submissions').select('*').eq('deal_id', req.params.id);
+  if (error) return res.json({ submissions: [], form_field_ids: formFieldIds, unavailable: true });
+  const defIds = [...new Set((subs || []).flatMap((x) => Object.keys(x.answers?.custom || {})))];
+  let defs = [];
+  if (defIds.length) ({ data: defs } = await supabase.from('custom_field_definitions').select('id, label, field_type').in('id', defIds));
+  const formById = new Map((forms || []).map((f) => [f.id, f]));
+  const submissions = [...(subs || [])]
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .map((x) => {
+      const f = formById.get(x.form_id);
+      const a = x.answers || {};
+      const order = f?.field_ids || Object.keys(a.custom || {});
+      const answers = order.filter((fid) => a.custom?.[fid] != null && String(a.custom[fid]).trim() !== '')
+        .map((fid) => ({ field_id: fid, label: (defs || []).find((d) => d.id === fid)?.label || 'Pregunta', value: String(a.custom[fid]) }));
+      return {
+        id: x.id, created_at: x.created_at, matched_existing: !!x.matched_existing,
+        form: f ? { id: f.id, name: f.name, logo_url: f.settings?.theme?.logo_url || null, brand_name: f.settings?.theme?.brand_name || null, background: f.settings?.theme?.background || null } : { id: x.form_id, name: 'Formulario eliminado' },
+        contact: { name: a.name || '', email: a.email || '', phone: a.phone || '', company: a.company || '' },
+        message: a.message || '',
+        answers,
+      };
+    });
+  res.json({ submissions, form_field_ids: formFieldIds });
 });
 
 // GET /api/deals/activity-health — por vendedor: tratos abiertos, cuántos sin próxima actividad y
