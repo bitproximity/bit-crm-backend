@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const { sendEmail } = require('../utils/email');
 const { createNotification } = require('../utils/notify');
 const { escapeHtml: h, escapeIlikeValue } = require('../utils/escape');
+const { normalizeSettings, dealTitleFor, pickExistingDeal } = require('../utils/leadFormKit');
 
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || 'https://crm.bitproximity.com';
 
@@ -19,7 +20,7 @@ router.use(cors({ origin: '*' }));
 // está activo) + las preguntas extra configuradas (los mismos campos personalizados de
 // "trato" que ya existen en Configuración, solo los elegidos para este formulario).
 router.get('/:id', async (req, res) => {
-  const { data, error } = await supabase.from('lead_forms').select('id, name, active, field_ids').eq('id', req.params.id).maybeSingle();
+  const { data, error } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'Formulario no encontrado.' });
 
   let custom_fields = [];
@@ -28,7 +29,16 @@ router.get('/:id', async (req, res) => {
     // Respeta el orden en que Mario los eligió al armar el formulario, no el orden de la tabla.
     custom_fields = (data.field_ids || []).map((id) => defs?.find((d) => d.id === id)).filter(Boolean);
   }
-  res.json({ id: data.id, name: data.name, active: data.active, custom_fields });
+  const settings = normalizeSettings(data.settings);
+  custom_fields = custom_fields.map((f) => ({
+    ...f,
+    long: settings.long_field_ids.includes(f.id),
+    required: settings.required_field_ids.includes(f.id),
+    hint: settings.hints[f.id] || '',
+  }));
+  // Solo lo que la página pública necesita para pintarse (no el embudo, el dueño ni los conteos).
+  const { long_field_ids, required_field_ids, hints, match_existing, product_line, deal_title, ...publicSettings } = settings;
+  res.json({ id: data.id, name: data.name, active: data.active, custom_fields, settings: publicSettings });
 });
 
 // POST /api/public/lead-forms/:id/submit  { name, email?, phone?, company?, message?, custom_answers?: { field_id: value } }
@@ -49,7 +59,7 @@ router.post('/:id/submit', async (req, res) => {
   const message = clip(body.message, 2000);
   let custom_answers = null;
   if (body.custom_answers && typeof body.custom_answers === 'object' && !Array.isArray(body.custom_answers)) {
-    custom_answers = Object.fromEntries(Object.entries(body.custom_answers).slice(0, 40).map(([k, v]) => [k, typeof v === 'object' ? '' : String(v ?? '').slice(0, 1000)]));
+    custom_answers = Object.fromEntries(Object.entries(body.custom_answers).slice(0, 40).map(([k, v]) => [k, typeof v === 'object' ? '' : String(v ?? '').trim().slice(0, 2000)]));
   }
   if (!name) return res.status(400).json({ error: 'Falta el nombre.' });
   if (email && !EMAIL_RE.test(email)) return res.status(400).json({ error: 'El correo no es válido.' });
@@ -57,6 +67,25 @@ router.post('/:id/submit', async (req, res) => {
   const { data: form } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
   if (!form) return res.status(404).json({ error: 'Formulario no encontrado.' });
   if (!form.active) return res.status(400).json({ error: 'Este formulario ya no está activo.' });
+  const settings = normalizeSettings(form.settings);
+
+  // Preguntas del formulario (para validar las obligatorias y nombrarlas en el aviso).
+  let defs = [];
+  if (form.field_ids?.length) {
+    const { data } = await supabase.from('custom_field_definitions').select('id, label, field_type').in('id', form.field_ids);
+    defs = data || [];
+  }
+  const answers = Object.fromEntries(Object.entries(custom_answers || {}).filter(([fid, v]) => form.field_ids?.includes(fid) && String(v ?? '').trim() !== ''));
+
+  const L = settings.labels;
+  if (settings.required.email && !email) return res.status(400).json({ error: `Falta: ${L.email || 'Correo'}.` });
+  if (settings.required.phone && !phone) return res.status(400).json({ error: `Falta: ${L.phone || 'Teléfono'}.` });
+  if (settings.required.company && !company) return res.status(400).json({ error: `Falta: ${L.company || 'Empresa'}.` });
+  const missing = settings.required_field_ids.filter((fid) => form.field_ids?.includes(fid) && !answers[fid]);
+  if (missing.length) {
+    const labels = missing.map((fid) => defs.find((d) => d.id === fid)?.label).filter(Boolean);
+    return res.status(400).json({ error: `Falta responder: ${labels.join(' · ') || 'preguntas obligatorias'}.` });
+  }
 
   try {
     let companyId = null;
@@ -74,8 +103,15 @@ router.post('/:id/submit', async (req, res) => {
     const [firstName, ...rest] = name.split(' ');
     let contactId = null;
     if (email) {
-      const { data: existing } = await supabase.from('contacts').select('id').ilike('email', escapeIlikeValue(email)).maybeSingle();
-      if (existing) contactId = existing.id;
+      const { data: existing } = await supabase.from('contacts').select('id, phone, company_id').ilike('email', escapeIlikeValue(email)).limit(1).maybeSingle();
+      if (existing) {
+        contactId = existing.id;
+        // Completa lo que le falte al contacto, sin pisar lo que ya tiene.
+        const patch = {};
+        if (phone && !existing.phone) patch.phone = phone;
+        if (companyId && !existing.company_id) patch.company_id = companyId;
+        if (Object.keys(patch).length) await supabase.from('contacts').update(patch).eq('id', contactId);
+      }
     }
     if (!contactId) {
       const { data: createdContact, error: ctErr } = await supabase
@@ -95,10 +131,23 @@ router.post('/:id/submit', async (req, res) => {
       contactId = createdContact.id;
     }
 
-    const { data: deal, error: dealErr } = await supabase
-      .from('deals')
-      .insert({
-        title: `Lead: ${company || name}`,
+    // ¿Ya hay un trato de este cliente en el embudo del formulario? Entonces la respuesta va ahí,
+    // en vez de crear un duplicado (p. ej. un cliente ya ganado que llena su brief musical).
+    let existingDeal = null;
+    if (settings.match_existing) {
+      const cols = 'id, title, status, owner_id, created_at';
+      let { data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', form.pipeline_id).eq('contact_id', contactId);
+      existingDeal = pickExistingDeal(cands);
+      if (!existingDeal && companyId) {
+        ({ data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', form.pipeline_id).eq('company_id', companyId));
+        existingDeal = pickExistingDeal(cands);
+      }
+    }
+
+    let deal = existingDeal;
+    if (!deal) {
+      const insert = {
+        title: dealTitleFor(settings, { name, company }),
         pipeline_id: form.pipeline_id,
         stage_id: form.stage_id,
         contact_id: contactId,
@@ -107,48 +156,64 @@ router.post('/:id/submit', async (req, res) => {
         value: 0,
         currency: 'USD',
         status: 'abierto',
-      })
-      .select('id')
-      .single();
-    if (dealErr) throw dealErr;
+      };
+      if (settings.product_line) insert.product_line = settings.product_line;
+      let { data: created, error: dealErr } = await supabase.from('deals').insert(insert).select('id, title, status, owner_id').single();
+      if (dealErr && insert.product_line && /product_line/.test(dealErr.message || '')) {
+        delete insert.product_line;
+        ({ data: created, error: dealErr } = await supabase.from('deals').insert(insert).select('id, title, status, owner_id').single());
+      }
+      if (dealErr) throw dealErr;
+      deal = created;
+    }
 
-    if (custom_answers && typeof custom_answers === 'object') {
-      const rows = Object.entries(custom_answers)
-        .filter(([fieldId, value]) => form.field_ids?.includes(fieldId) && value !== undefined && value !== null && String(value).trim() !== '')
-        .map(([fieldId, value]) => ({ field_id: fieldId, entity_id: deal.id, value: String(value) }));
-      if (rows.length) {
-        try {
-          await supabase.from('custom_field_values').insert(rows);
-        } catch (cfErr) {
-          console.error('[lead-forms] no se pudieron guardar las respuestas personalizadas:', cfErr.message);
-        }
+    const rows = Object.entries(answers).map(([fieldId, value]) => ({ field_id: fieldId, entity_id: deal.id, value: String(value), updated_at: new Date().toISOString() }));
+    if (rows.length) {
+      try {
+        // upsert: si el trato ya existía y tenía esas respuestas, se actualizan con las nuevas.
+        await supabase.from('custom_field_values').upsert(rows, { onConflict: 'field_id,entity_id' });
+      } catch (cfErr) {
+        console.error('[lead-forms] no se pudieron guardar las respuestas personalizadas:', cfErr.message);
       }
     }
 
-    if (message) {
-      // No es una promesa nativa (es el query builder de Supabase) — .catch() encadenado
-      // directo falla con "is not a function". Si esto falla (ej. author_id no admite
-      // nulo), no debe tumbar el envío del formulario — el trato ya se creó, que es lo
-      // que importa — así que va en su propio try/catch.
+    const noteLines = [];
+    if (existingDeal) noteLines.push(`${name}${company ? ` (${company})` : ''} respondió el formulario «${form.name}».`);
+    for (const d of defs) if (answers[d.id]) noteLines.push(`${d.label}: ${answers[d.id]}`);
+    if (message) noteLines.push(`Mensaje: ${message}`);
+    if (existingDeal || message) {
       try {
         await supabase.from('activities').insert({
           entity_type: 'deal', entity_id: deal.id, type: 'nota',
-          title: 'Mensaje del formulario', summary: message,
+          title: existingDeal ? `Respuestas del formulario «${form.name}»` : 'Mensaje del formulario',
+          summary: (existingDeal ? noteLines.join('\n') : message).slice(0, 8000),
         });
       } catch (noteErr) {
-        console.error('[lead-forms] no se pudo guardar la nota del mensaje:', noteErr.message);
+        console.error('[lead-forms] no se pudo guardar la nota:', noteErr.message);
       }
     }
 
     await supabase.from('lead_forms').update({ submissions_count: (form.submissions_count || 0) + 1 }).eq('id', form.id);
 
+    // Cada envío queda guardado tal cual para las métricas y la tabla de respuestas. Si la tabla aún
+    // no existe (falta el script 066), el envío igual funciona.
+    try {
+      const { error: subErr } = await supabase.from('lead_form_submissions').insert({
+        form_id: form.id, deal_id: deal.id, contact_id: contactId, company_id: companyId,
+        matched_existing: !!existingDeal,
+        answers: { name, email, phone, company, message, custom: answers },
+      });
+      if (subErr) console.error('[lead-forms] no se pudo guardar el envío:', subErr.message);
+    } catch (subErr) {
+      console.error('[lead-forms] no se pudo guardar el envío:', subErr.message);
+    }
+
     res.status(201).json({ ok: true });
 
     // Correo + notificación en la app — después de responder, no debe demorar el envío
-    // para el visitante. Si el formulario tiene dueño, le llega solo a esa persona; si
-    // no, les llega a todos los admin (así siempre hay alguien enterado, aunque nadie
-    // haya asignado el formulario todavía).
-    notifyNewLead(form, deal.id, { name, email, phone, company, message }, custom_answers).catch((err) => {
+    // para el visitante. Si el trato ya tenía responsable, le llega a esa persona; si no, al
+    // dueño del formulario; si tampoco hay, a todos los admin.
+    notifyNewLead(form, deal, { name, email, phone, company, message }, answers, !!existingDeal).catch((err) => {
       console.error('[lead-forms] no se pudo avisar del nuevo lead:', err.message);
     });
   } catch (err) {
@@ -156,10 +221,12 @@ router.post('/:id/submit', async (req, res) => {
   }
 });
 
-async function notifyNewLead(form, dealId, submission, customAnswers) {
+async function notifyNewLead(form, deal, submission, customAnswers, attached) {
+  const dealId = deal.id;
   let recipients = [];
-  if (form.owner_id) {
-    const { data: owner } = await supabase.from('team_members').select('id, email, full_name').eq('id', form.owner_id).maybeSingle();
+  const ownerId = (attached && deal.owner_id) || form.owner_id;
+  if (ownerId) {
+    const { data: owner } = await supabase.from('team_members').select('id, email, full_name').eq('id', ownerId).maybeSingle();
     if (owner) recipients = [owner];
   } else {
     const { data: admins } = await supabase.from('team_members').select('id, email, full_name').eq('role', 'admin').eq('active', true);
@@ -182,7 +249,7 @@ async function notifyNewLead(form, dealId, submission, customAnswers) {
   const dealUrl = `${PUBLIC_APP_URL}/deals/${dealId}`;
   const html = `
     <div style="font-family: sans-serif; color: #1a1a2e; max-width: 480px;">
-      <p>Nuevo lead desde <strong>${h(form.name)}</strong>:</p>
+      <p>${attached ? `Un cliente que ya tenía trato respondió <strong>${h(form.name)}</strong> (las respuestas quedaron en «${h(deal.title || '')}»):` : `Nuevo lead desde <strong>${h(form.name)}</strong>:`}</p>
       <table style="border-collapse:collapse;">
         <tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Nombre</td><td style="padding:4px 0;">${h(submission.name)}</td></tr>
         ${submission.email ? `<tr><td style="padding:4px 12px 4px 0;color:#8B87A3;">Correo</td><td style="padding:4px 0;">${h(submission.email)}</td></tr>` : ''}
@@ -196,10 +263,10 @@ async function notifyNewLead(form, dealId, submission, customAnswers) {
   `;
 
   for (const r of recipients) {
-    sendEmail({ to: r.email, subject: `Nuevo lead: ${String(form.name).replace(/[\r\n]+/g, ' ')}`, html }).catch(() => {});
+    sendEmail({ to: r.email, subject: `${attached ? 'Respuesta de cliente' : 'Nuevo lead'}: ${String(form.name).replace(/[\r\n]+/g, ' ')}`, html }).catch(() => {});
     createNotification({
       recipient_id: r.id, type: 'new_lead',
-      title: `Nuevo lead: ${submission.company || submission.name}`,
+      title: `${attached ? 'Respondió el formulario' : 'Nuevo lead'}: ${submission.company || submission.name}`,
       body: `Desde el formulario "${form.name}"`,
       entity_type: 'deal', entity_id: dealId, link: `/deals/${dealId}`,
     });
