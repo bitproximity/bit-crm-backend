@@ -34,3 +34,9 @@ ok(all.period.from === '2025-05' && all.totals.meetings === 6, '«Todo»: desde 
 
 const { isExcludedExecutive } = require('../src/utils/bitProspectTeam');
 ok(isExcludedExecutive('Martina') && isExcludedExecutive('martina villacreses') && isExcludedExecutive('MARTINA  Villacreses') && !isExcludedExecutive('Mariana') && !isExcludedExecutive('Sofía Pérez') && !isExcludedExecutive(''), 'Martina queda fuera del resumen escrita como sea; Mariana y Sofía no');
+
+// Martina: sin fila, pero sus reuniones siguen sumando a los totales y al reparto por marca.
+const h = computeGlobalSummary(records, { today: '2026-11-22', team: ['Sofía Pérez', 'Ana Espinel'], hideExecutive: isExcludedExecutive });
+ok(!h.executives.some((e) => /martina/i.test(e.name)), 'Martina no tiene fila en la tabla');
+ok(h.totals.meetings === 5 && h.month_totals['2026-11'] === 2 && h.by_brand.find((b) => b.name === 'Spoonity').count === 2, 'pero sus reuniones siguen en los totales del mes y en el reparto por marca');
+ok(h.totals.undated === 1 && h.executives.every((e) => e.undated === 0), 'su reunión sin fecha cuenta en el aviso general, no en una fila');

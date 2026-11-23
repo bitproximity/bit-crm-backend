@@ -8,9 +8,6 @@ const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
 const { logAudit } = require('../utils/audit');
 const { isExcludedFromBitProspect, isExcludedExecutive } = require('../utils/bitProspectTeam');
-// Reuniones de alguien que ya no está en el equipo de Bit Prospect (p. ej. Martina): fuera de los
-// resúmenes por persona del equipo.
-const byTeamMember = (r) => !isExcludedExecutive((r.executive && r.executive.trim()) || r.team_members?.full_name);
 const { todayInTz } = require('../utils/businessDate');
 const { findCompanyIdByName } = require('../utils/findCompany');
 
@@ -352,9 +349,11 @@ router.get('/leaderboard', async (req, res) => {
     getBitProspectTeam(),
   ]);
   if (error) return res.status(500).json({ error: error.message });
-  records = (records || []).filter(byTeamMember);
+  records = records || [];
 
+  // Totales con todas las reuniones; en las filas por persona no aparece quien ya no está en el equipo.
   const global = computeB2bDashboard(records, team || []);
+  global.by_person = (global.by_person || []).filter((p) => !isExcludedExecutive(p.name));
 
   // Además del total, desglosa cada persona por cliente para ver dónde está parada su carga.
   // Se siembra igual con todo el equipo (aunque no tengan registros en ningún cliente todavía).
@@ -374,7 +373,7 @@ router.get('/leaderboard', async (req, res) => {
 
   res.json({
     ...global,
-    by_person_by_client: Object.values(byPersonByClient).map((p) => ({
+    by_person_by_client: Object.values(byPersonByClient).filter((p) => !isExcludedExecutive(p.name)).map((p) => ({
       name: p.name,
       clients: Object.entries(p.clients).map(([client, stats]) => ({ client, ...stats })),
     })),
@@ -391,7 +390,8 @@ router.get('/global-summary', async (req, res) => {
   ]);
   if (error) return res.status(500).json({ error: error.message });
   const { computeGlobalSummary } = require('../utils/b2bGlobalSummary');
-  res.json(computeGlobalSummary((records || []).filter(byTeamMember), {
+  res.json(computeGlobalSummary(records || [], {
+    hideExecutive: isExcludedExecutive,
     from: req.query.from === 'all' ? 'all' : ym(req.query.from),
     to: ym(req.query.to),
     executive: typeof req.query.executive === 'string' && req.query.executive.trim() ? req.query.executive.trim().slice(0, 120) : undefined,

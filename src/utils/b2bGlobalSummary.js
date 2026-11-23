@@ -64,18 +64,21 @@ function computeGlobalSummary(records, opts) {
     return rows.get(k);
   };
   (opts.team || []).forEach((n) => ensure(execKey(n)));
+  const hidden = (r) => (opts.hideExecutive ? opts.hideExecutive(executiveOf(r)) : false);
   for (const r of period) {
+    if (hidden(r)) continue; // suma a los totales y repartos, pero sin fila propia
     const row = ensure(execKey(executiveOf(r)));
     row.by_month[monthOf(r)] += 1; row.total += 1;
     if (isRealized(r)) row.realized += 1;
     row.brands.add(r.companies?.name || 'Sin marca');
   }
   const undatedBy = {};
-  for (const r of undated) { const k = execKey(executiveOf(r)); undatedBy[k] = (undatedBy[k] || 0) + 1; ensure(k); }
+  for (const r of undated) { if (hidden(r)) continue; const k = execKey(executiveOf(r)); undatedBy[k] = (undatedBy[k] || 0) + 1; ensure(k); }
 
+  // Totales por mes de TODO el período (incluye reuniones de quien no tiene fila).
   const monthTotals = Object.fromEntries(months.map((mo) => [mo, 0]));
+  for (const r of period) monthTotals[monthOf(r)] += 1;
   const executives = [...rows.entries()].map(([k, row]) => {
-    for (const mo of months) monthTotals[mo] += row.by_month[mo];
     const active = months.filter((mo) => mo <= thisMonth);
     return {
       key: k, name: row.name, total: row.total, realized: row.realized,
