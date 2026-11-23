@@ -377,6 +377,25 @@ router.get('/leaderboard', async (req, res) => {
   });
 });
 
+// GET /api/b2b/global-summary?from=YYYY-MM&to=YYYY-MM&executive=Nombre — todas las marcas juntas:
+// reuniones de cada ejecutivo por mes y su reparto por marca, industria y país (from=all = todo).
+router.get('/global-summary', async (req, res) => {
+  const ym = (v) => (typeof v === 'string' && /^\d{4}-\d{2}$/.test(v) ? v : undefined);
+  const [{ data: records, error }, team] = await Promise.all([
+    fetchAll(supabase.from('b2b_records').select('id, status, meeting_date, realized_date, executive, industry, country, client_company_id, created_by, team_members(full_name), companies(name)')),
+    getBitProspectTeam(),
+  ]);
+  if (error) return res.status(500).json({ error: error.message });
+  const { computeGlobalSummary } = require('../utils/b2bGlobalSummary');
+  res.json(computeGlobalSummary(records || [], {
+    from: req.query.from === 'all' ? 'all' : ym(req.query.from),
+    to: ym(req.query.to),
+    executive: typeof req.query.executive === 'string' && req.query.executive.trim() ? req.query.executive.trim().slice(0, 120) : undefined,
+    team: (team || []).map((m) => m.full_name),
+    today: todayInTz(),
+  }));
+});
+
 // POST /api/b2b/clients/:id/export-to-contacts — convierte los registros de un cliente de Bit Prospect
 // en Contactos + Empresas reales del CRM, agrupados en una Lista (tag) "Bit Prospect <cliente>"
 // para que aparezcan junto a las listas de Apollo/Lusha en el módulo de Listas.

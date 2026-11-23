@@ -166,4 +166,4 @@ function computeB2bDashboard(records, teamMembers = []) {
   };
 }
 
-module.exports = { computeB2bDashboard };
+module.exports = { computeB2bDashboard, groupSimilarText, normalizeText };
