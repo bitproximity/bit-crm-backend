@@ -802,7 +802,7 @@ function buildServer(teamMember) {
         team_member_id: z.string().uuid(),
         role: z.enum(['admin', 'operaciones', 'outbound', 'wifi_partner']).optional(),
         blocked_pages: z.array(z.enum(BLOCKABLE_PAGES)).optional(),
-        active: z.boolean().optional().describe('false = quitar acceso (desactiva y bloquea el inicio de sesión, igual que «Quitar acceso» en Equipo); true = reactivar'),
+        active: z.preprocess((v) => (v === 'false' ? false : v === 'true' ? true : v), z.boolean()).optional().describe('false = quitar acceso (desactiva y bloquea el inicio de sesión, igual que «Quitar acceso» en Equipo); true = reactivar'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
