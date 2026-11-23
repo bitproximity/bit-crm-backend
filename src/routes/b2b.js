@@ -380,6 +380,13 @@ router.get('/leaderboard', async (req, res) => {
   });
 });
 
+// GET /api/b2b/team — quiénes pueden figurar como ejecutivo de una reunión (equipo de Bit Prospect,
+// sin las personas excluidas como Jorge Iván, Martina, Diego, Mario…).
+router.get('/team', async (req, res) => {
+  const team = await getBitProspectTeam();
+  res.json(team.map((m) => ({ full_name: m.full_name, active: true })).sort((a, b) => a.full_name.localeCompare(b.full_name)));
+});
+
 // GET /api/b2b/global-summary?from=YYYY-MM&to=YYYY-MM&executive=Nombre — todas las marcas juntas:
 // reuniones de cada ejecutivo por mes y su reparto por marca, industria y país (from=all = todo).
 router.get('/global-summary', async (req, res) => {
