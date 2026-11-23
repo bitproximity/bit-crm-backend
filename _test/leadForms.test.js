@@ -72,7 +72,7 @@ const srv = app.listen(0, async () => {
   ok(r.status === 200 && r.body.already_existed && fake.db.lead_forms.length === 1 && fake.db.custom_field_definitions.length === 9, 'usar la plantilla otra vez no duplica nada');
 
   r = await call('GET', `/api/public/lead-forms/${form.id}`);
-  ok(r.body.settings.title === 'Musicalizamos espacios comerciales' && r.body.settings.theme.brand_name === 'Bit Music' && r.body.custom_fields[5].hint.startsWith('Ejemplo') && r.body.custom_fields[0].required && !r.body.settings.match_existing && !r.body.settings.product_line, 'la página pública recibe textos, marca y pistas, pero no la configuración interna');
+  ok(r.body.settings.title === 'Musicalizamos espacios comerciales' && r.body.settings.theme.brand_name === 'Bit Music' && r.body.custom_fields[5].hint.startsWith('Ejemplo') && r.body.custom_fields[0].required && !r.body.settings.match_existing && !r.body.settings.product_line && r.body.settings.notify_emails === undefined, 'la página pública recibe textos, marca y pistas, pero no la configuración interna');
 
   const id = (k) => defs.find((d) => d.key === k).id;
   r = await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Luis Paz', email: 'luis@pollo.co', company: 'Pollo Feliz', custom_answers: { [id('bm_puntos_de_venta')]: '12' } });

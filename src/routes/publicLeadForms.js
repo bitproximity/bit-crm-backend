@@ -58,7 +58,7 @@ router.get('/:id', async (req, res) => {
     hint: settings.hints[f.id] || '',
   }));
   // Solo lo que la página pública necesita para pintarse (no el embudo, el dueño ni los conteos).
-  const { long_field_ids, required_field_ids, hints, match_existing, product_line, deal_title, ...publicSettings } = settings;
+  const { long_field_ids, required_field_ids, hints, match_existing, product_line, deal_title, notify_emails, ...publicSettings } = settings;
   // Link personalizado: precarga lo que ya sabemos del cliente y lo que ya había respondido.
   let prefill = null;
   const deal = await dealFromToken(data, req.query.t);
