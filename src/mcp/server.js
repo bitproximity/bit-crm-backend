@@ -611,6 +611,52 @@ function buildServer(teamMember) {
   );
 
   server.registerTool(
+    'bitcrm_delete_form_response_deal',
+    {
+      title: 'Borrar un trato creado por un formulario (y su contacto/empresa si quedan sueltos)',
+      description: 'Para limpiar pruebas o spam de los formularios: borra el trato, sus respuestas de formulario, campos y notas, y además el contacto y la empresa SOLO si no tienen otros tratos, contactos ni facturas. Con confirm=false solo muestra qué borraría.',
+      inputSchema: {
+        deal_id: z.string().uuid(),
+        confirm: z.preprocess((v) => (v === 'false' ? false : v === 'true' ? true : v), z.boolean()).default(false),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ deal_id, confirm }) => {
+      if (teamMember.role !== 'admin') return errorResult('Solo un admin puede borrar.');
+      const { data: deal } = await supabase.from('deals').select('id, title, contact_id, company_id').eq('id', deal_id).maybeSingle();
+      if (!deal) return errorResult('Trato no encontrado.');
+      const count = async (table, col, val, extra) => {
+        let q = supabase.from(table).select('id', { count: 'exact', head: true }).eq(col, val);
+        if (extra) q = extra(q);
+        const { count: c } = await q;
+        return c || 0;
+      };
+      const subs = await count('lead_form_submissions', 'deal_id', deal.id);
+      let deleteContact = false; let deleteCompany = false;
+      if (deal.contact_id) deleteContact = (await count('deals', 'contact_id', deal.contact_id, (q) => q.neq('id', deal.id))) === 0;
+      if (deal.company_id) {
+        const otherDeals = await count('deals', 'company_id', deal.company_id, (q) => q.neq('id', deal.id));
+        const otherContacts = await count('contacts', 'company_id', deal.company_id, deal.contact_id && deleteContact ? (q) => q.neq('id', deal.contact_id) : undefined);
+        const invoices = await count('invoices', 'company_id', deal.company_id);
+        deleteCompany = otherDeals === 0 && otherContacts === 0 && invoices === 0;
+      }
+      const plan = { deal: deal.title, form_responses: subs, delete_contact: deleteContact, delete_company: deleteCompany };
+      if (!confirm) return textResult({ preview: true, ...plan });
+
+      await supabase.from('lead_form_submissions').delete().eq('deal_id', deal.id);
+      await supabase.from('custom_field_values').delete().eq('entity_id', deal.id);
+      await supabase.from('activities').delete().eq('entity_type', 'deal').eq('entity_id', deal.id);
+      await supabase.from('notifications').delete().eq('entity_type', 'deal').eq('entity_id', deal.id);
+      const { error } = await supabase.from('deals').delete().eq('id', deal.id);
+      if (error) return errorResult(error.message);
+      if (deleteContact) await supabase.from('contacts').delete().eq('id', deal.contact_id);
+      if (deleteCompany) await supabase.from('companies').delete().eq('id', deal.company_id);
+      await logAudit('deal', deal.id, 'deleted', teamMember.id, { via: 'mcp', form_cleanup: plan });
+      return textResult({ deleted: true, ...plan });
+    }
+  );
+
+  server.registerTool(
     'bitcrm_bulk_delete_deals_except',
     {
       title: 'Borrar en lote todos los tratos de un embudo excepto los indicados',
