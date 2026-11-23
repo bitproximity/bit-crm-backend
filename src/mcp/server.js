@@ -796,24 +796,33 @@ function buildServer(teamMember) {
   server.registerTool(
     'bitcrm_update_team_member_access',
     {
-      title: 'Cambiar rol o secciones bloqueadas de una persona',
-      description: `Cambia el rol y/o las secciones bloqueadas puntualmente (blocked_pages) de una persona del equipo. Secciones bloqueables: ${BLOCKABLE_PAGES.join(', ')}. blocked_pages reemplaza la lista completa. Solo admin.`,
+      title: 'Cambiar rol, secciones bloqueadas o acceso de una persona',
+      description: `Cambia el rol, las secciones bloqueadas puntualmente (blocked_pages) y/o quita o devuelve el acceso (active) de una persona del equipo. Secciones bloqueables: ${BLOCKABLE_PAGES.join(', ')}. blocked_pages reemplaza la lista completa. Solo admin.`,
       inputSchema: {
         team_member_id: z.string().uuid(),
         role: z.enum(['admin', 'operaciones', 'outbound', 'wifi_partner']).optional(),
         blocked_pages: z.array(z.enum(BLOCKABLE_PAGES)).optional(),
+        active: z.boolean().optional().describe('false = quitar acceso (desactiva y bloquea el inicio de sesión, igual que «Quitar acceso» en Equipo); true = reactivar'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ team_member_id, role, blocked_pages }) => {
+    async ({ team_member_id, role, blocked_pages, active }) => {
       if (teamMember.role !== 'admin') return errorResult('Solo un admin puede cambiar accesos.');
+      if (active === false && team_member_id === teamMember.id) return errorResult('No puedes quitarte el acceso a ti mismo.');
       const update = {};
       if (role) update.role = role;
       if (blocked_pages) update.blocked_pages = blocked_pages;
+      if (typeof active === 'boolean') update.active = active;
       if (!Object.keys(update).length) return errorResult('Nada que cambiar.');
       const { data, error } = await supabase.from('team_members').update(update).eq('id', team_member_id).select('*').single();
       if (error) return errorResult(error.message);
-      return textResult({ updated: true, member: { id: data.id, full_name: data.full_name, role: data.role, blocked_pages: data.blocked_pages || [] } });
+      if (typeof active === 'boolean' && data.auth_user_id) {
+        // Mismo efecto que el botón de la app: sin acceso = inicio de sesión bloqueado; reactivar lo libera.
+        const { error: banErr } = await supabase.auth.admin.updateUserById(data.auth_user_id, { ban_duration: active ? 'none' : '876000h' });
+        if (banErr) return errorResult(`Se actualizó el perfil, pero no se pudo ${active ? 'desbloquear' : 'bloquear'} el inicio de sesión: ${banErr.message}`);
+      }
+      await logAudit('team_member', data.id, 'updated', teamMember.id, { via: 'mcp', ...update });
+      return textResult({ updated: true, member: { id: data.id, full_name: data.full_name, role: data.role, active: data.active, blocked_pages: data.blocked_pages || [] } });
     }
   );
 
