@@ -31,3 +31,6 @@ const f = computeGlobalSummary(records, { today: '2026-11-22', executive: 'sofia
 ok(f.focus === 'Sofía Pérez' && f.focus_total === 3 && f.by_country.length === 2, 'filtrar por un ejecutivo: sus marcas, industrias y países');
 const all = computeGlobalSummary(records, { today: '2026-11-22', from: 'all' });
 ok(all.period.from === '2025-05' && all.totals.meetings === 6, '«Todo»: desde la primera reunión registrada');
+
+const { isExcludedExecutive } = require('../src/utils/bitProspectTeam');
+ok(isExcludedExecutive('Martina') && isExcludedExecutive('martina villacreses') && isExcludedExecutive('MARTINA  Villacreses') && !isExcludedExecutive('Mariana') && !isExcludedExecutive('Sofía Pérez') && !isExcludedExecutive(''), 'Martina queda fuera del resumen escrita como sea; Mariana y Sofía no');

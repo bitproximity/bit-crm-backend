@@ -7,7 +7,10 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePage } = require('../middleware/pagePermissions');
 const { computeB2bDashboard } = require('../utils/b2bDashboard');
 const { logAudit } = require('../utils/audit');
-const { isExcludedFromBitProspect } = require('../utils/bitProspectTeam');
+const { isExcludedFromBitProspect, isExcludedExecutive } = require('../utils/bitProspectTeam');
+// Reuniones de alguien que ya no está en el equipo de Bit Prospect (p. ej. Martina): fuera de los
+// resúmenes por persona del equipo.
+const byTeamMember = (r) => !isExcludedExecutive((r.executive && r.executive.trim()) || r.team_members?.full_name);
 const { todayInTz } = require('../utils/businessDate');
 const { findCompanyIdByName } = require('../utils/findCompany');
 
@@ -344,11 +347,12 @@ router.get('/dashboard', async (req, res) => {
 // GET /api/b2b/leaderboard — rendimiento por persona cruzando TODOS los clientes,
 // para comparar el equipo de Outbound en conjunto (no cliente por cliente).
 router.get('/leaderboard', async (req, res) => {
-  const [{ data: records, error }, team] = await Promise.all([
+  let [{ data: records, error }, team] = await Promise.all([
     fetchAll(supabase.from('b2b_records').select('*, team_members(full_name), companies(name)')),
     getBitProspectTeam(),
   ]);
   if (error) return res.status(500).json({ error: error.message });
+  records = (records || []).filter(byTeamMember);
 
   const global = computeB2bDashboard(records, team || []);
 
@@ -387,7 +391,7 @@ router.get('/global-summary', async (req, res) => {
   ]);
   if (error) return res.status(500).json({ error: error.message });
   const { computeGlobalSummary } = require('../utils/b2bGlobalSummary');
-  res.json(computeGlobalSummary(records || [], {
+  res.json(computeGlobalSummary((records || []).filter(byTeamMember), {
     from: req.query.from === 'all' ? 'all' : ym(req.query.from),
     to: ym(req.query.to),
     executive: typeof req.query.executive === 'string' && req.query.executive.trim() ? req.query.executive.trim().slice(0, 120) : undefined,
