@@ -4,7 +4,7 @@
 // filtraba nada, así que alguien excluido acá igual aparecía en el panel de metas.
 const { normName } = require('./quotaProgress');
 
-const BIT_PROSPECT_TEAM_EXCLUDE = ['Diego Molina', 'Jorge', 'Mario Ramos', 'Martina Villacreses'];
+const BIT_PROSPECT_TEAM_EXCLUDE = ['Diego Molina', 'Jorge', 'Jorge Iván', 'Mario Ramos', 'Martina Villacreses'];
 
 // Compara sin importar mayúsculas, tildes ni espacios de más (así «mario  ramos» también queda fuera).
 const EXCLUDED_NORMALIZED = new Set(BIT_PROSPECT_TEAM_EXCLUDE.map(normName));

@@ -40,3 +40,5 @@ const h = computeGlobalSummary(records, { today: '2026-11-22', team: ['Sofía P�
 ok(!h.executives.some((e) => /martina/i.test(e.name)), 'Martina no tiene fila en la tabla');
 ok(h.totals.meetings === 5 && h.month_totals['2026-11'] === 2 && h.by_brand.find((b) => b.name === 'Spoonity').count === 2, 'pero sus reuniones siguen en los totales del mes y en el reparto por marca');
 ok(h.totals.undated === 1 && h.executives.every((e) => e.undated === 0), 'su reunión sin fecha cuenta en el aviso general, no en una fila');
+const { isExcludedFromBitProspect } = require('../src/utils/bitProspectTeam');
+ok(isExcludedFromBitProspect('Jorge Iván') && isExcludedFromBitProspect('jorge ivan') && isExcludedExecutive('Jorge Iván'), 'Jorge Iván fuera de Bit Prospect (equipo, metas y resumen)');
