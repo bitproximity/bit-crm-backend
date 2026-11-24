@@ -17,9 +17,19 @@ router.get('/', async (req, res) => {
     .select('*, pipelines(name), pipeline_stages(name), team_members!lead_forms_owner_id_fkey(full_name)')
     .order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
+  // El contador de la tarjeta sale de las respuestas guardadas (si se borra una prueba o spam, baja);
+  // si la tabla aún no existe, queda el contador viejo.
+  const counts = {};
+  let hasCounts = false;
+  try {
+    const { data: subs, error: sErr } = await fetchAll(supabase.from('lead_form_submissions').select('id, form_id'));
+    if (sErr) throw new Error(sErr.message);
+    for (const x of subs || []) counts[x.form_id] = (counts[x.form_id] || 0) + 1;
+    hasCounts = true;
+  } catch { /* sin tabla: usa submissions_count */ }
   // Ajustes ya completados con sus valores por defecto (p. ej. a quién avisar), para que la pantalla
   // muestre lo que de verdad aplica y al guardar no se pierda.
-  res.json((data || []).map((f) => ({ ...f, settings: normalizeSettings(f.settings) })));
+  res.json((data || []).map((f) => ({ ...f, submissions_count: hasCounts ? (counts[f.id] || 0) : f.submissions_count, settings: normalizeSettings(f.settings) })));
 });
 
 // POST /api/lead-forms  { name, pipeline_id, stage_id, owner_id?, field_ids? }

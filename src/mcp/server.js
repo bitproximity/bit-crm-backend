@@ -91,6 +91,42 @@ async function cleanupFormDeal(deal_id, confirm, actorId) {
   return { result: { deleted: true, ...plan } };
 }
 
+// Mueve las respuestas de formulario de un trato a otro (p. ej. el formulario creó un trato nuevo
+// pero el cliente ya tenía uno en otro pipeline): copia las respuestas como campos del trato
+// destino, deja una nota con todo y apunta los envíos al destino.
+async function moveFormResponses(sourceId, targetId, actorId) {
+  const { data: target } = await supabase.from('deals').select('id, title').eq('id', targetId).maybeSingle();
+  if (!target) return { error: 'Trato destino no encontrado.' };
+  const { data: subs } = await supabase.from('lead_form_submissions').select('*').eq('deal_id', sourceId);
+  let moved = 0;
+  for (const sub of subs || []) {
+    const { data: form } = await supabase.from('lead_forms').select('name, field_ids').eq('id', sub.form_id).maybeSingle();
+    const custom = sub.answers?.custom || {};
+    const rows = Object.entries(custom).filter(([fid, v]) => (form?.field_ids || []).includes(fid) && String(v ?? '').trim() !== '')
+      .map(([field_id, value]) => ({ field_id, entity_id: target.id, value: String(value), updated_at: new Date().toISOString() }));
+    if (rows.length) {
+      const { error } = await supabase.from('custom_field_values').upsert(rows, { onConflict: 'field_id,entity_id' });
+      if (error) return { error: error.message };
+    }
+    let lines = [];
+    if (rows.length) {
+      const { data: defs } = await supabase.from('custom_field_definitions').select('id, label').in('id', rows.map((r) => r.field_id));
+      lines = rows.map((r) => `${defs?.find((d) => d.id === r.field_id)?.label || 'Pregunta'}: ${r.value}`);
+    }
+    const a = sub.answers || {};
+    await supabase.from('activities').insert({
+      entity_type: 'deal', entity_id: target.id, type: 'nota',
+      title: `Respuestas del formulario «${form?.name || ''}»`,
+      summary: [`${a.name || ''}${a.company ? ` (${a.company})` : ''}${a.email ? ` · ${a.email}` : ''}`, ...lines, a.message ? `Mensaje: ${a.message}` : ''].filter(Boolean).join('\n').slice(0, 8000),
+    });
+    const { error: uErr } = await supabase.from('lead_form_submissions').update({ deal_id: target.id, matched_existing: true }).eq('id', sub.id);
+    if (uErr) return { error: uErr.message };
+    moved += 1;
+  }
+  await logAudit('deal', target.id, 'updated', actorId, { via: 'mcp', form_responses_moved_from: sourceId, moved });
+  return { moved, target };
+}
+
 function buildServer(teamMember) {
   const server = new McpServer({ name: 'bit-crm-mcp-server', version: '1.0.0' });
 
@@ -635,11 +671,24 @@ function buildServer(teamMember) {
         deal_id: z.string().uuid().describe('ID del trato a borrar'),
         with_form_cleanup: z.preprocess((v) => (v === 'false' ? false : v === 'true' ? true : v), z.boolean()).optional()
           .describe('true = además borra sus respuestas de formulario, campos y notas, y el contacto/empresa si quedan sueltos (pruebas o spam)'),
+        move_form_responses_to: z.string().uuid().optional()
+          .describe('ID de otro trato: antes de borrar, pasa ahí las respuestas de formulario de este trato (duplicado creado por el formulario)'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
-    async ({ deal_id, with_form_cleanup }) => {
+    async ({ deal_id, with_form_cleanup, move_form_responses_to }) => {
       if (teamMember.role !== 'admin') return errorResult('Solo un admin puede borrar tratos.');
+      if (move_form_responses_to) {
+        if (move_form_responses_to === deal_id) return errorResult('El trato destino no puede ser el mismo.');
+        const m = await moveFormResponses(deal_id, move_form_responses_to, teamMember.id);
+        if (m.error) return errorResult(m.error);
+        const { data: src } = await supabase.from('deals').select('title').eq('id', deal_id).maybeSingle();
+        await supabase.from('custom_field_values').delete().eq('entity_id', deal_id);
+        await supabase.from('notifications').delete().eq('entity_type', 'deal').eq('entity_id', deal_id);
+        const { error } = await supabase.from('deals').delete().eq('id', deal_id);
+        if (error) return errorResult(`Las respuestas ya están en «${m.target.title}», pero no se pudo borrar el duplicado: ${error.message}`);
+        return textResult({ moved_responses: m.moved, to: m.target.title, deleted: src?.title || deal_id });
+      }
       if (with_form_cleanup) {
         const r = await cleanupFormDeal(deal_id, true, teamMember.id);
         return r.error ? errorResult(r.error) : textResult(r.result);
