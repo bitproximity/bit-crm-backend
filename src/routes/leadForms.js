@@ -116,6 +116,81 @@ router.post('/templates/:key', requireRole('admin'), async (req, res) => {
   res.status(201).json(data);
 });
 
+// GET /api/lead-forms/inbox?form_id=&status=pending|done|all — bandeja de respuestas de todos los
+// formularios, para revisar cada una y dejarla en el trato que corresponde. Para las que están por
+// asignar sugiere los otros tratos de la misma empresa (en cualquier pipeline).
+router.get('/inbox', async (req, res) => {
+  const { data: forms } = await supabase.from('lead_forms').select('id, name, slug, field_ids, settings, pipeline_id').order('created_at');
+  const { data: subs, error } = await fetchAll(supabase.from('lead_form_submissions').select('*'));
+  if (error) {
+    const missing = /lead_form_submissions|does not exist|schema cache/i.test(error.message || '');
+    return res.status(missing ? 409 : 500).json({ error: missing ? 'Falta correr el script 066 en Supabase.' : error.message });
+  }
+  const reviewed = (x) => (x.reviewed_at !== undefined ? !!x.reviewed_at : !!x.matched_existing);
+  const formById = new Map((forms || []).map((f) => [f.id, f]));
+
+  const counts = { all: { pending: 0, total: 0 } };
+  for (const x of subs || []) {
+    const c = (counts[x.form_id] ||= { pending: 0, total: 0 });
+    c.total += 1; counts.all.total += 1;
+    if (!reviewed(x)) { c.pending += 1; counts.all.pending += 1; }
+  }
+
+  const status = ['pending', 'done', 'all'].includes(req.query.status) ? req.query.status : 'pending';
+  let list = (subs || []).filter((x) => (!req.query.form_id || x.form_id === req.query.form_id)
+    && (status === 'all' || (status === 'pending' ? !reviewed(x) : reviewed(x))));
+  list.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  list = list.slice(0, 200);
+
+  const dealCols = 'id, title, status, value, currency, company_id, contact_id, created_at, pipelines(name), pipeline_stages(name), companies(name)';
+  const { data: deals } = await selectIn(() => supabase.from('deals').select(dealCols), 'id', list.map((x) => x.deal_id));
+  const dealById = new Map((deals || []).map((d) => [d.id, d]));
+  const companyIds = [...new Set(list.map((x) => x.company_id || dealById.get(x.deal_id)?.company_id).filter(Boolean))];
+  const { data: sameCompany } = await selectIn(() => supabase.from('deals').select(dealCols), 'company_id', companyIds);
+  const fieldIds = [...new Set(list.flatMap((x) => Object.keys(x.answers?.custom || {})))];
+  let defs = [];
+  if (fieldIds.length) ({ data: defs } = await supabase.from('custom_field_definitions').select('id, label').in('id', fieldIds));
+  const label = (fid) => (defs || []).find((d) => d.id === fid)?.label || 'Pregunta';
+  const brief = (d) => d && ({ id: d.id, title: d.title, status: d.status, value: d.value, currency: d.currency, pipeline: d.pipelines?.name || null, stage: d.pipeline_stages?.name || null, company: d.companies?.name || null });
+
+  const rows = list.map((x) => {
+    const f = formById.get(x.form_id);
+    const a = x.answers || {};
+    const deal = dealById.get(x.deal_id);
+    const companyId = x.company_id || deal?.company_id;
+    const order = f?.field_ids || Object.keys(a.custom || {});
+    return {
+      id: x.id, created_at: x.created_at, reviewed: reviewed(x), matched_existing: !!x.matched_existing,
+      form: f ? { id: f.id, name: f.name, logo_url: f.settings?.theme?.logo_url || null, background: f.settings?.theme?.background || null, pipeline_id: f.pipeline_id } : { id: x.form_id, name: 'Formulario eliminado' },
+      contact: { name: a.name || '', email: a.email || '', phone: a.phone || '', company: a.company || '' },
+      message: a.message || '',
+      answers: order.filter((fid) => a.custom?.[fid] != null && String(a.custom[fid]).trim() !== '').map((fid) => ({ field_id: fid, label: label(fid), value: String(a.custom[fid]) })),
+      deal: brief(deal) || null,
+      // ¿Es alguno de estos? Otros tratos de la misma empresa, el abierto más reciente primero.
+      suggestions: reviewed(x) ? [] : (sameCompany || [])
+        .filter((d) => d.company_id === companyId && d.id !== x.deal_id)
+        .sort((p, q) => (q.status === 'abierto') - (p.status === 'abierto') || String(q.created_at).localeCompare(String(p.created_at)))
+        .slice(0, 5).map(brief),
+    };
+  });
+  const formsOut = (forms || []).map((f) => ({ id: f.id, name: f.name, logo_url: f.settings?.theme?.logo_url || null, background: f.settings?.theme?.background || null, pending: counts[f.id]?.pending || 0, total: counts[f.id]?.total || 0 }));
+  res.json({ forms: formsOut, counts: counts.all, status, rows, review_supported: (subs || []).length === 0 || (subs || []).some((x) => x.reviewed_at !== undefined) });
+});
+
+// POST /api/lead-forms/submissions/:sid/review { reviewed } — «Dejar en este trato» (o volver a pendiente).
+router.post('/submissions/:sid/review', requireRole('admin'), async (req, res) => {
+  const on = req.body?.reviewed !== false;
+  const { data, error } = await supabase.from('lead_form_submissions')
+    .update({ reviewed_at: on ? new Date().toISOString() : null, reviewed_by: on ? req.teamMember.id : null })
+    .eq('id', req.params.sid).select('id').maybeSingle();
+  if (error) {
+    const missing = /reviewed_(at|by)|column|schema cache/i.test(error.message || '');
+    return res.status(missing ? 409 : 400).json({ error: missing ? 'Falta correr el script 068 en Supabase para marcar respuestas como revisadas.' : error.message });
+  }
+  if (!data) return res.status(404).json({ error: 'Respuesta no encontrada.' });
+  res.json({ ok: true, reviewed: on });
+});
+
 // GET /api/lead-forms/:id/responses — cada envío con su trato + métricas del formulario.
 router.get('/:id/responses', async (req, res) => {
   const { data: form, error: fErr } = await supabase.from('lead_forms').select('*').eq('id', req.params.id).maybeSingle();
@@ -192,6 +267,8 @@ router.post('/submissions/:sid/assign', requireRole('admin'), async (req, res) =
   const previous = sub.deal_id;
   const { error: uErr } = await supabase.from('lead_form_submissions').update({ deal_id: deal.id, matched_existing: true }).eq('id', sub.id);
   if (uErr) return res.status(400).json({ error: uErr.message });
+  // Asignarla también la da por revisada (si existe la columna; sin el script 068 no pasa nada).
+  await supabase.from('lead_form_submissions').update({ reviewed_at: new Date().toISOString(), reviewed_by: req.teamMember.id }).eq('id', sub.id);
   await logAudit('lead_form', sub.form_id, 'updated', req.teamMember.id, { submission: sub.id, from_deal: previous, to_deal: deal.id });
   // Si el trato anterior lo había creado esta misma respuesta, se avisa para poder borrarlo.
   res.json({ ok: true, deal, previous_deal_id: previous, previous_was_auto_created: !sub.matched_existing && !!previous });

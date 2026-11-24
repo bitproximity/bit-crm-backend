@@ -191,6 +191,25 @@ const srv = app.listen(0, async () => {
   await call('PATCH', `/api/lead-forms/${form.id}`, { settings: { ...fake.db.lead_forms.find((x) => x.id === form.id).settings, notify_emails: [] } });
   ok(fake.db.lead_forms.find((x) => x.id === form.id).settings.notify_emails.length === 0, 'vaciar la lista a propósito se respeta (no vuelve a poner a Mario)');
 
+  // ── Bandeja de respuestas ──
+  fake.db.deals.push({ id: 'd-toks-neo', title: 'Toks · Neomedia', status: 'abierto', pipeline_id: 'p-neo', company_id: 'co-toks', created_at: '2026-11-01' });
+  r = await call('GET', '/api/lead-forms/inbox');
+  ok(r.status === 200 && r.body.status === 'pending' && r.body.counts.total === fake.db.lead_form_submissions.length && r.body.forms.some((f) => f.id === form.id && f.total > 0), 'la bandeja trae las respuestas por asignar y cuántas hay por formulario');
+  const pend = r.body.rows.find((x) => !x.matched_existing);
+  ok(pend && pend.answers.length > 0 && pend.answers.every((a) => a.label && a.value) && pend.form.name, 'cada respuesta viene completa, con su formulario');
+  r = await call('GET', `/api/lead-forms/inbox?status=all&form_id=${form.id}`);
+  ok(r.body.rows.every((x) => x.form.id === form.id) && r.body.rows.length === fake.db.lead_form_submissions.filter((x) => x.form_id === form.id).length, 'se filtra por formulario');
+  // Una respuesta nueva de Toks (sin trato en Bit Music) → sugiere sus tratos de otros pipelines
+  fake.db.lead_form_submissions.push({ id: 'sub-toks2', form_id: form.id, deal_id: 'auto-1', company_id: 'co-toks', matched_existing: false, answers: { name: 'Ana', company: 'Toks', custom: {} }, created_at: '2026-11-23T10:00:00Z' });
+  fake.db.deals.push({ id: 'auto-1', title: 'Toks 2 · Bit Music', status: 'abierto', pipeline_id: 'p-music', company_id: 'co-toks', created_at: '2026-11-23' });
+  r = await call('GET', '/api/lead-forms/inbox');
+  const toks2 = r.body.rows.find((x) => x.id === 'sub-toks2');
+  ok(toks2 && toks2.suggestions[0].id === 'd-toks-neo' && toks2.suggestions.some((d) => d.id === 'd-toks') && !toks2.suggestions.some((d) => d.id === 'auto-1'), 'sugiere los otros tratos de la misma empresa en cualquier pipeline (el abierto más reciente primero)');
+  r = await call('POST', '/api/lead-forms/submissions/sub-toks2/review', { reviewed: true });
+  ok(r.status === 200 && fake.db.lead_form_submissions.find((x) => x.id === 'sub-toks2').reviewed_at, '«Dejar en este trato» la marca como revisada');
+  r = await call('GET', '/api/lead-forms/inbox');
+  ok(!r.body.rows.some((x) => x.id === 'sub-toks2'), 'y sale de «Por asignar»');
+
   // ── Todo centralizado en el trato ──
   r = await call('GET', '/api/deals/d-toks/form-responses');
   ok(r.status === 200 && r.body.submissions.length >= 2 && r.body.form_field_ids.length === 26, 'el trato trae todas sus respuestas de formularios y la lista de preguntas de formularios');
