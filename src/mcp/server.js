@@ -496,11 +496,14 @@ function buildServer(teamMember) {
     'bitcrm_get_metrics_summary',
     {
       title: 'Resumen de métricas del CRM',
-      description: 'Devuelve el resumen general: tratos abiertos, ganados este mes, tareas vencidas, tareas propias pendientes y valor total del pipeline abierto en USD.',
-      inputSchema: {},
+      description: 'Devuelve el resumen general: tratos abiertos, ganados este mes, tareas vencidas, tareas propias pendientes y valor total del pipeline abierto en USD. Con include_catalog=true agrega el catálogo de productos (nombre, tipo, cobro, precio, disponible).',
+      inputSchema: {
+        include_catalog: z.preprocess((v) => (v === 'false' ? false : v === 'true' ? true : v), z.boolean()).optional()
+          .describe('true = incluir el catálogo de productos que aparece en «Producto» de los tratos'),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async () => {
+    async ({ include_catalog } = {}) => {
       const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
       const [{ count: openDeals }, { count: wonThisMonth }, { count: overdueTasks }, { data: valueRows }, { data: rates }] = await Promise.all([
         supabase.from('deals').select('*', { count: 'exact', head: true }).eq('status', 'abierto'),
@@ -516,6 +519,10 @@ function buildServer(teamMember) {
         won_this_month: wonThisMonth || 0,
         overdue_tasks: overdueTasks || 0,
         open_pipeline_value_usd: Math.round(openPipelineValueUsd),
+        ...(include_catalog ? { catalog: await (async () => {
+          const { data } = await supabase.from('products').select('name, type, billing_frequency, price, currency, active').order('name');
+          return (data || []).map((p) => ({ name: p.name, type: p.type, billing: p.billing_frequency, price: p.price, currency: p.currency, available: p.active !== false }));
+        })() } : {}),
       });
     }
   );
