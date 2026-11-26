@@ -200,17 +200,23 @@ router.delete('/:id/permanent', requireRole('admin'), async (req, res) => {
   if (!member) return res.status(404).json({ error: 'Miembro no encontrado' });
   if (member.active) return res.status(400).json({ error: 'Primero hay que quitarle el acceso antes de eliminarlo definitivamente.' });
 
+  // Primero el perfil y después la cuenta de Auth: si team_members.auth_user_id apunta a auth.users
+  // sin «on delete cascade», Supabase no deja borrar la cuenta mientras el perfil exista
+  // («Database error deleting user»).
+  const { error } = await supabase.from('team_members').delete().eq('id', id);
+  if (error) return res.status(400).json({ error: `No se pudo borrar el perfil: ${error.message}` });
+
   if (member.auth_user_id) {
     const { error: authError } = await supabase.auth.admin.deleteUser(member.auth_user_id);
-    // Si la cuenta de Auth ya no existe (borrada por otra vía), seguimos igual con el
-    // perfil — no tiene sentido bloquear el borrado por eso.
+    // Si la cuenta de Auth ya no existe (borrada por otra vía), no hay nada más que hacer.
     if (authError && !/not.*found/i.test(authError.message || '')) {
-      return res.status(400).json({ error: `No se pudo borrar la cuenta de acceso: ${authError.message}` });
+      // El perfil ya no existe y el login sigue bloqueado (ban de la baja), así que la persona
+      // no puede entrar; solo queda la cuenta de Auth huérfana para revisarla en Supabase.
+      console.error(`[team] perfil ${id} borrado, pero no la cuenta de Auth ${member.auth_user_id}: ${authError.message}`);
+      await supabase.auth.admin.updateUserById(member.auth_user_id, { ban_duration: '876000h' }).catch(() => {});
+      return res.json({ ok: true, auth_deleted: false, warning: `Se eliminó el perfil de ${member.full_name || 'la persona'}, pero su cuenta de acceso quedó bloqueada en Supabase (${authError.message}).` });
     }
   }
-
-  const { error } = await supabase.from('team_members').delete().eq('id', id);
-  if (error) return res.status(400).json({ error: error.message });
 
   res.status(204).send();
 });
