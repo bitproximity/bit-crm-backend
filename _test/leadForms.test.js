@@ -33,7 +33,7 @@ ok(m.questions[0].stats.sum === 14 && m.questions[0].stats.avg === 7 && m.questi
 
 // ── Rutas con base simulada ──
 const fake = createFakeDb({
-  pipelines: [{ id: 'p-music', name: 'Bit Music', pipeline_stages: [{ id: 'st-2', name: 'Contactado', position: 2 }, { id: 'st-1', name: 'Prospecto', position: 1 }] }],
+  pipelines: [{ id: 'p-music', name: 'Bit Music', pipeline_stages: [{ id: 'st-2', name: 'Contactado', position: 2 }, { id: 'st-1', name: 'Prospecto', position: 1 }] }, { id: 'p-neo', name: 'Neomedia', pipeline_stages: [] }],
   team_members: [{ id: 'u-admin', email: 'mario@x.com', role: 'admin', active: true }, { id: 'u-ana', email: 'ana@x.com', role: 'vendedor', active: true }],
   custom_field_definitions: [], custom_field_values: [], lead_forms: [], lead_form_submissions: [],
   companies: [{ id: 'co-toks', name: 'Toks' }],
@@ -119,6 +119,32 @@ const srv = app.listen(0, async () => {
   // Edición: solo campos permitidos y ajustes saneados
   r = await call('PATCH', `/api/lead-forms/${form.id}`, { submissions_count: 999, settings: { ...form.settings, title: 'Nuevo', theme: { ...form.settings.theme, primary: 'url(x)' } } });
   ok(r.status === 200 && r.body.submissions_count !== 999 && r.body.settings.title === 'Nuevo' && !r.body.settings.theme.primary && r.body.settings.theme.secondary === '#E600FF', 'editar no deja tocar el contador y limpia los ajustes');
+
+  // ── Bit Music busca también en Neomedia (ahí están los clientes de música) ──
+  ok(form.settings.match_pipeline_ids.join() === 'p-neo', 'la plantilla de Bit Music busca también en el pipeline Neomedia');
+  r = await call('GET', `/api/public/lead-forms/${form.id}`);
+  ok(r.body.settings.match_pipeline_ids === undefined, 'la página pública no ve en qué pipelines se busca');
+  fake.db.companies.push({ id: 'co-mu', name: 'Mundo Único' });
+  fake.db.deals.push({ id: 'd-mu-neo', title: 'Tivi music - Mundo único', status: 'abierto', pipeline_id: 'p-neo', company_id: 'co-mu', owner_id: 'u-ana', created_at: '2026-10-01' });
+  let muBefore = fake.db.deals.length;
+  r = await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Carmen Bran', email: 'carmen@mundounico.ec', company: 'Mundo Único', custom_answers: { [id('bm_puntos_de_venta')]: '3', [id('bm_paises_ciudades')]: 'Quito' } });
+  await wait();
+  ok(r.status === 201 && fake.db.deals.length === muBefore && fake.db.custom_field_values.some((v) => v.entity_id === 'd-mu-neo' && v.value === 'Quito'), 'cliente con trato en Neomedia: las respuestas van a ese trato y no se crea un duplicado en Bit Music');
+  ok(fake.db.lead_form_submissions.at(-1).deal_id === 'd-mu-neo' && fake.db.lead_form_submissions.at(-1).matched_existing === true, 'y el envío queda asociado al trato de Neomedia');
+  // Si tiene trato en los dos, manda el del pipeline del formulario
+  fake.db.deals.push({ id: 'd-mu-music', title: 'Mundo Único · Bit Music', status: 'abierto', pipeline_id: 'p-music', company_id: 'co-mu', created_at: '2026-09-01' });
+  r = await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Carmen Bran', email: 'carmen@mundounico.ec', company: 'Mundo Único', custom_answers: { [id('bm_puntos_de_venta')]: '4', [id('bm_paises_ciudades')]: 'Guayaquil' } });
+  await wait();
+  ok(fake.db.lead_form_submissions.at(-1).deal_id === 'd-mu-music', 'si tiene trato en Bit Music y en Neomedia, primero va al de Bit Music');
+  // Sin pipelines adicionales, Neomedia no se mira
+  fake.db.deals.splice(fake.db.deals.findIndex((d) => d.id === 'd-mu-music'), 1);
+  await call('PATCH', `/api/lead-forms/${form.id}`, { settings: { ...fake.db.lead_forms.find((x) => x.id === form.id).settings, match_pipeline_ids: [] } });
+  muBefore = fake.db.deals.length;
+  await call('POST', `/api/public/lead-forms/${form.id}/submit`, { name: 'Carmen Bran', email: 'carmen@mundounico.ec', company: 'Mundo Único', custom_answers: { [id('bm_puntos_de_venta')]: '5', [id('bm_paises_ciudades')]: 'Cuenca' } });
+  await wait();
+  ok(fake.db.deals.length === muBefore + 1 && fake.db.lead_form_submissions.at(-1).deal_id !== 'd-mu-neo', 'si se quita Neomedia de la lista, se crea el trato en Bit Music como antes');
+  await call('PATCH', `/api/lead-forms/${form.id}`, { settings: { ...fake.db.lead_forms.find((x) => x.id === form.id).settings, match_pipeline_ids: ['p-neo', 'p-neo', 5] } });
+  ok(fake.db.lead_forms.find((x) => x.id === form.id).settings.match_pipeline_ids.join() === 'p-neo', 'la lista se guarda limpia (sin repetidos ni basura)');
 
   // ── Link corto ──
   ok(form.slug === 'bitmusic', 'la plantilla deja el link corto «bitmusic»');

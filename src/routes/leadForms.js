@@ -92,8 +92,15 @@ router.post('/templates/:key', requireRole('admin'), async (req, res) => {
     byKey[f.key] = created.id;
   }
 
+  let matchPipelineIds = [];
+  for (const pname of tpl.match_pipeline_names || []) {
+    const { data: mp } = await supabase.from('pipelines').select('id').ilike('name', pname).limit(1).maybeSingle();
+    if (mp && mp.id !== pipe.id) matchPipelineIds.push(mp.id);
+  }
+
   const settings = normalizeSettings({
     ...tpl.settings,
+    match_pipeline_ids: matchPipelineIds,
     long_field_ids: tpl.fields.filter((f) => f.long).map((f) => byKey[f.key]),
     required_field_ids: tpl.fields.filter((f) => f.required).map((f) => byKey[f.key]),
     hints: Object.fromEntries(tpl.fields.filter((f) => f.hint).map((f) => [byKey[f.key], f.hint])),

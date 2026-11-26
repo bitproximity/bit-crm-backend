@@ -4,7 +4,7 @@ const supabase = require('../config/supabase');
 const { sendEmail } = require('../utils/email');
 const { createNotification } = require('../utils/notify');
 const { escapeHtml: h, escapeIlikeValue } = require('../utils/escape');
-const { normalizeSettings, dealTitleFor, pickExistingDeal, verifyDealToken, UUID_RE } = require('../utils/leadFormKit');
+const { normalizeSettings, dealTitleFor, pickExistingDeal, matchPipelineIds, verifyDealToken, UUID_RE } = require('../utils/leadFormKit');
 
 // El formulario se pide por su id o por su link corto (slug), p. ej. /public/bitmusic.
 async function loadForm(key) {
@@ -58,7 +58,7 @@ router.get('/:id', async (req, res) => {
     hint: settings.hints[f.id] || '',
   }));
   // Solo lo que la página pública necesita para pintarse (no el embudo, el dueño ni los conteos).
-  const { long_field_ids, required_field_ids, hints, match_existing, product_line, deal_title, notify_emails, ...publicSettings } = settings;
+  const { long_field_ids, required_field_ids, hints, match_existing, match_pipeline_ids, product_line, deal_title, notify_emails, ...publicSettings } = settings;
   // Link personalizado: precarga lo que ya sabemos del cliente y lo que ya había respondido.
   let prefill = null;
   const deal = await dealFromToken(data, req.query.t);
@@ -171,13 +171,18 @@ router.post('/:id/submit', async (req, res) => {
     // ¿Ya hay un trato de este cliente en el embudo del formulario? Entonces la respuesta va ahí,
     // en vez de crear un duplicado (p. ej. un cliente ya ganado que llena su brief musical).
     let existingDeal = linkedDeal ? { id: linkedDeal.id, title: linkedDeal.title, status: linkedDeal.status, owner_id: linkedDeal.owner_id } : null;
+    // Orden: el pipeline del formulario (por contacto y luego por empresa) y después los pipelines
+    // adicionales configurados (p. ej. Neomedia para Bit Music), con el mismo criterio.
     if (!existingDeal && settings.match_existing) {
       const cols = 'id, title, status, owner_id, created_at';
-      let { data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', form.pipeline_id).eq('contact_id', contactId);
-      existingDeal = pickExistingDeal(cands);
-      if (!existingDeal && companyId) {
-        ({ data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', form.pipeline_id).eq('company_id', companyId));
+      for (const pid of matchPipelineIds(form, settings)) {
+        let { data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', pid).eq('contact_id', contactId);
         existingDeal = pickExistingDeal(cands);
+        if (!existingDeal && companyId) {
+          ({ data: cands } = await supabase.from('deals').select(cols).eq('pipeline_id', pid).eq('company_id', companyId));
+          existingDeal = pickExistingDeal(cands);
+        }
+        if (existingDeal) break;
       }
     }
 

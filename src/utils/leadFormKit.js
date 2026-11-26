@@ -28,6 +28,9 @@ function normalizeSettings(raw) {
     required_field_ids: ids(s.required_field_ids),
     hints: Object.fromEntries(Object.entries(hints).slice(0, 60).map(([k, v]) => [k, clipStr(v, 300)]).filter(([, v]) => v)),
     match_existing: s.match_existing !== false,
+    // Otros pipelines donde también buscar el trato del cliente antes de crear uno nuevo
+    // (p. ej. Bit Music busca también en Neomedia, donde están los clientes de música).
+    match_pipeline_ids: [...new Set(ids(s.match_pipeline_ids))].slice(0, 10),
     // A quién avisar por correo en cada respuesta (además del responsable). Si nunca se configuró,
     // va a la dirección por defecto (Mario); si se dejó vacío a propósito, a nadie extra.
     notify_emails: Array.isArray(s.notify_emails)
@@ -57,6 +60,12 @@ function dealTitleFor(settings, { name, company }) {
 // Trato al que se pega la respuesta: el abierto más reciente del mismo embudo (del contacto y, si no
 // hay, de la empresa); si no hay abierto, el ganado más reciente (un cliente nuevo que llena su
 // brief). Un trato perdido no se reabre: se crea uno nuevo.
+// Dónde buscar, en orden: primero el pipeline del formulario y después los adicionales.
+function matchPipelineIds(form, settings) {
+  const extra = (settings?.match_pipeline_ids || []).filter((id) => id && id !== form.pipeline_id);
+  return [form.pipeline_id, ...extra].filter(Boolean);
+}
+
 function pickExistingDeal(deals) {
   const byNewest = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
   const open = (deals || []).filter((d) => d.status === 'abierto').sort(byNewest);
@@ -72,6 +81,8 @@ const BIT_MUSIC_TEMPLATE = {
   name: 'Bit Music · Perfil musical de la marca',
   pipeline_name: 'Bit Music',
   stage_name: 'Prospecto',
+  // Los clientes de música están también en el pipeline Neomedia: se busca su trato ahí antes de crear otro.
+  match_pipeline_names: ['Neomedia'],
   fields: [
     { key: 'bm_puntos_de_venta', label: '¿Cuántos puntos de venta tienen?', field_type: 'number', required: true },
     { key: 'bm_paises_ciudades', label: '¿En qué países o ciudades tienen presencia?', field_type: 'text', long: true, required: true },
@@ -247,7 +258,7 @@ function computeFormMetrics({ submissions, deals, fields, today }) {
   };
 }
 
-module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE, BITWIFI_TEMPLATE, BIT_SIGNAGE_TEMPLATE };
+module.exports = { normalizeSettings, dealTitleFor, pickExistingDeal, matchPipelineIds, computeFormMetrics, TEMPLATES, BIT_MUSIC_TEMPLATE, BITWIFI_TEMPLATE, BIT_SIGNAGE_TEMPLATE };
 
 // ── Link corto (slug) y link personalizado por trato ──
 const crypto = require('crypto');
